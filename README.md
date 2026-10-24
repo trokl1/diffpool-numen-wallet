@@ -5,6 +5,10 @@ an official Numen Network wallet**. Beta software; no independent security audit
 Start with a small amount and keep an offline backup of every account's recovery
 phrase or original secret seed. Never use the public test keys in this repository.
 
+Download the signed Android APK from [GitHub Releases](https://github.com/trokl1/diffpool-numen-wallet/releases).
+The current release is [0.5.0 beta](https://github.com/trokl1/diffpool-numen-wallet/releases/tag/v0.5.0).
+Release assets include SHA-256 checksums; source archives are generated from the release tag.
+
 ## Features
 
 - Create and import sr25519 accounts, multiple accounts and watch-only addresses.
