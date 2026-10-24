@@ -1,0 +1,17 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="xyz.diffpool.numen" android:versionCode="6" android:versionName="0.5.0">
+ <uses-sdk android:minSdkVersion="28" android:targetSdkVersion="35" />
+ <uses-permission android:name="android.permission.INTERNET" />
+ <uses-permission android:name="android.permission.CAMERA" />
+ <uses-feature android:name="android.hardware.camera" android:required="false" />
+ <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
+ <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+ <uses-permission android:name="android.permission.USE_FINGERPRINT" />
+ <application android:label="DiffPool NUMEN" android:icon="@drawable/icon" android:theme="@android:style/Theme.Material.NoActionBar" android:allowBackup="false" android:fullBackupContent="false" android:usesCleartextTraffic="false" android:debuggable="false" android:hardwareAccelerated="true">
+  <activity android:name=".MainActivity" android:exported="true" android:windowSoftInputMode="adjustResize">
+   <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
+  </activity>
+  <provider android:name=".QrShareProvider" android:authorities="xyz.diffpool.numen.qr" android:exported="false" android:grantUriPermissions="true">
+   <grant-uri-permission android:path="/receive.png" />
+  </provider>
+ </application>
+</manifest>

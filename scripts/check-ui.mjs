@@ -1,0 +1,141 @@
+import { chromium } from 'playwright';
+import { createServer } from 'node:http';
+import { readFile,mkdir,writeFile } from 'node:fs/promises';
+import assert from 'node:assert/strict';
+import { fixture,PUBLIC_SEED,PASSWORD } from './qa-fixture.mjs';
+import {historyFixture} from './history-fixture.mjs';
+import {POOL_WALLETS} from '../transfers.mjs';
+import {seedEntry} from '../core.mjs';
+import {VERSION} from '../config.mjs';
+const network=await fixture(),store=new Map(),actions=[];
+const history=historyFixture({mixed:true}),balanceAccounts=[];
+let historyGate=null;
+let enabledBio=false,cancelBio=true;
+const server=createServer(async(req,res)=>{
+  const file=req.url==='/'?'index.html':req.url.slice(1);
+  if(!['index.html','app.js','style.css'].includes(file)){res.writeHead(404).end();return;}
+  res.setHeader('Content-Type',file.endsWith('.js')?'application/javascript':file.endsWith('.css')?'text/css':'text/html');
+  res.end(await readFile('web/'+file));
+});
+await new Promise(r=>server.listen(0,'127.0.0.1',r));
+const executable=process.env.QA_CHROME||'C:/Program Files/Google/Chrome/Application/chrome.exe';
+const browser=await chromium.launch({executablePath:executable,headless:true});
+try{
+  const page=await browser.newPage({viewport:{width:412,height:915},deviceScaleFactor:1});
+  page.setDefaultTimeout(30000);const errors=[];page.on('pageerror',e=>errors.push(e.message));
+  await page.exposeFunction('nativeQA',async(action,data)=>{
+    actions.push(action);
+    if(action==='importFileStatus')return 'none';
+    if(action==='cancelImportFile')return 'ok';
+    if(action==='historyRequest'){if(historyGate)await historyGate;return history.request(data);}
+    if(action==='request'){if(data.method==='system_accountNextIndex')balanceAccounts.push(data.params[0]);return JSON.stringify({jsonrpc:'2.0',id:1,result:await network.request(data.endpoint,data.method,data.params)});}
+    if(action==='biometricStatus')return JSON.stringify({available:true,enabled:enabledBio});
+    if(action==='biometricEnable'){enabledBio=true;return 'ok';}
+    if(action==='biometricDisable'){enabledBio=false;return 'ok';}
+    if(action==='biometricUnlock')return PASSWORD;
+    if(action==='biometricConfirm'){if(cancelBio)throw Error('QA cancelled biometric');return JSON.stringify({password:PASSWORD,txid:data.txid});}
+    if(action.startsWith('load'))return store.get(action.replace('load','save'))||'';
+    if(action.startsWith('save')){store.set(action,data);if(action==='save')enabledBio=false;return 'ok';}
+    if(action==='copy'||action==='openExplorer')return 'ok';
+    throw Error('Unknown native action '+action);
+  });
+  await page.addInitScript(()=>{window.Android={call:(id,action,json)=>window.nativeQA(action,JSON.parse(json)).then(value=>window.nativeResult(id,true,value),error=>window.nativeResult(id,false,error.message))};});
+  await page.goto(`http://127.0.0.1:${server.address().port}`);
+  await page.locator('#create').click();
+  const seed=await page.locator('#seed').inputValue();assert.equal(seed.split(' ').length,12);
+  await page.locator('#password').fill(PASSWORD);await page.locator('#repeat').fill(PASSWORD);
+  await page.locator('#word3').fill(seed.split(' ')[2]);await page.locator('#word9').fill(seed.split(' ')[8]);await page.locator('#backupCheck').check();await page.locator('#name').fill('Первый');
+  await page.locator('#saveWallet').click();await page.locator('#walletSelect').waitFor();
+  const firstAddress=await page.locator('#walletSelect').inputValue();assert.notEqual(firstAddress,network.alice);
+  await page.waitForFunction(()=>document.querySelector('#message')?.textContent.includes('Баланс проверен'));
+  assert.match(await page.locator('#autoBalance').textContent(),/вкл\./);
+  assert.equal(balanceAccounts.at(-1),firstAddress);
+  assert.equal(history.state.calls.at(-1).operation,'incoming');
+  assert.equal(await page.locator('#incomingPreview details').count(),3,'incoming loads on home without opening history');
+  await page.setViewportSize({width:320,height:800});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'home incoming preview must fit a narrow screen');
+  await page.setViewportSize({width:412,height:915});await mkdir('evidence',{recursive:true});await page.screenshot({path:'evidence/auto-home.png',fullPage:true});
+  await page.locator('#autoBalance').click(); // Explicit OFF for offline/key-management regression scenarios below.
+  assert.ok(!store.get('save').includes(seed));
+  await page.locator('#importWallet').click();await page.locator('#seed').fill(PUBLIC_SEED);await page.locator('#name').fill('Тестовый');await page.locator('#password').fill(PASSWORD);await page.locator('#backupCheck').check();await page.locator('#saveWallet').click();
+  await page.waitForFunction(address=>document.querySelector('#walletSelect')?.value===address,network.alice);
+  assert.equal(await page.locator('#walletSelect option').count(),2);
+  await page.locator('#contacts').click();assert.equal(await page.getByText(/Мой кошелёк/).count(),2);await page.locator('#contact1').click();await page.locator('#contactName').fill('Майнинг');await page.locator('#saveContact').click();await page.locator('#back').click();assert.match(await page.locator('#rename').textContent(),/Майнинг/);
+  await page.locator('#refresh').click();await page.waitForFunction(()=>document.querySelector('#balance')?.textContent.includes('100'));
+  const balance=await page.locator('#balance').textContent();network.state.offline=true;await page.locator('#refresh').click();await page.waitForFunction(()=>document.querySelector('#message')?.textContent.includes('offline'));assert.equal(await page.locator('#balance').textContent(),balance);network.state.offline=false;
+  await page.locator('#settings').click();await page.locator('#settingsPassword').fill(PASSWORD);await page.locator('#enableBio').click();await page.locator('#disableBio').waitFor();await page.locator('#back').click();
+  await page.locator('#send').click();await page.locator('#recipient').fill(network.bob);await page.locator('#amount').fill('1');await page.locator('#prepare').click();await page.locator('#confirmBio').waitFor();
+  await page.locator('#confirmBio').click();await page.waitForFunction(()=>document.querySelector('#message')?.textContent.includes('cancelled'));assert.equal(network.state.submits.length,0);
+  await page.locator('#sendPassword').fill('incorrect-password');await page.locator('#confirmPassword').click();await page.waitForFunction(()=>document.querySelector('#message')?.textContent.includes('Неверный пароль'));assert.equal(network.state.submits.length,0);
+  await page.locator('#sendPassword').fill(PASSWORD);await page.locator('#confirmPassword').click();await page.locator('#walletSelect').waitFor();assert.equal(network.state.submits.length,1);assert.equal(network.state.submits[0].signer,network.alice);
+  assert.equal(JSON.parse(store.get('saveHistory')).entries[0].status,'submitted');
+  const count=network.state.requests.length;await page.locator('#lock').click();await page.locator('#unlockPassword').fill(PASSWORD);await page.locator('#unlock').click();await page.locator('#walletSelect').waitFor();assert.equal(network.state.requests.length,count);
+  await page.locator('#send').click();await page.locator('#recipient').fill(network.bob);await page.locator('#amount').fill('1');await page.locator('#prepare').click();await page.waitForFunction(()=>document.querySelector('#message')?.textContent.includes('предыдущую отправку'));assert.equal(network.state.submits.length,1);await page.locator('#back').click();
+  await page.locator('#walletSelect').selectOption(firstAddress);await page.waitForFunction(addr=>document.querySelector('#walletSelect')?.value===addr,firstAddress);await page.locator('#rename').waitFor();
+  await page.locator('#settings').click();network.state.badGenesis=true;await page.locator('#endpoint').fill('https://wrong-network.example');await page.locator('#saveEndpoint').click();await page.waitForFunction(()=>document.querySelector('#message')?.textContent.includes('не проверенная'));network.state.badGenesis=false;await page.locator('#back').click();
+  const beforeWatchHistory=history.state.calls.length;
+  await page.locator('#addWatch').click();await page.locator('#feePreset').click();await page.locator('#watchPassword').fill(PASSWORD);await page.locator('#saveWatch').click();
+  await page.waitForFunction(addr=>document.querySelector('#walletSelect')?.value===addr,POOL_WALLETS[0].address);assert.equal(await page.locator('#send').isDisabled(),true);
+  assert.equal(history.state.calls.length,beforeWatchHistory,'adding a watch wallet does not query history when auto is OFF');
+  await page.locator('#explorer').click();await page.waitForFunction(()=>document.querySelectorAll('#networkRows details').length===20);
+  assert.equal(history.state.calls.length,beforeWatchHistory+2);const first=await page.locator('#networkRows').textContent();
+  await page.locator('#nextTransfers').click();await page.waitForFunction(()=>document.querySelector('#networkRows')?.textContent.includes('0980'));const second=await page.locator('#networkRows').textContent();assert.notEqual(first,second);
+  history.state.offline=true;await page.locator('#nextTransfers').click();await page.waitForFunction(()=>document.querySelector('#message')?.textContent.includes('history offline'));assert.equal(await page.locator('#networkRows').textContent(),second);
+  history.state.offline=false;await page.locator('#previousTransfers').click();await page.waitForFunction(()=>document.querySelector('#networkRows')?.textContent.includes('1000'));assert.equal(await page.locator('#networkRows').textContent(),first);
+  await page.locator('#back').click();const historyCalls=history.state.calls.length;await page.locator('#explorer').click();await page.waitForFunction(()=>document.querySelectorAll('#networkRows details').length===20);assert.equal(history.state.calls.length,historyCalls,'cached first page needs no request');
+  await page.locator('#back').click();await page.locator('#incoming').click();await page.waitForFunction(()=>document.querySelectorAll('#networkRows details').length===20);
+  assert.equal(history.state.calls.at(-1).operation,'incoming');assert.ok(!(await page.locator('#networkRows summary').allTextContents()).some(t=>t.includes('Исходящий')));
+  await page.locator('#nextTransfers').click();await page.waitForFunction(()=>document.querySelectorAll('#networkRows details').length===10);
+  await page.locator('#outgoingTab').click();await page.waitForFunction(()=>document.querySelectorAll('#networkRows details').length===20);
+  assert.equal(history.state.calls.at(-1).operation,'outgoing');assert.ok(!(await page.locator('#networkRows summary').allTextContents()).some(t=>t.includes('Входящий')));
+  await page.locator('#back').click();await page.locator('#addWatch').click();await page.locator('#poolPreset').click();await page.locator('#watchPassword').fill(PASSWORD);await page.locator('#saveWatch').click();await page.waitForFunction(addr=>document.querySelector('#walletSelect')?.value===addr,POOL_WALLETS[1].address);
+  await page.locator('#explorer').click();await page.waitForFunction(()=>document.querySelectorAll('#networkRows details').length===20);await page.locator('#rewardsTab').click();await page.waitForFunction(()=>document.querySelector('#networkRows')?.textContent.includes('Награда:'));assert.equal(await page.locator('#networkRows details').count(),20);
+  assert.ok(!actions.includes('openExplorer'));assert.equal(network.state.submits.length,1,'watch-only flows never broadcast');
+  await page.setViewportSize({width:320,height:800});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'narrow screen must not overflow');
+  await page.setViewportSize({width:412,height:915});await mkdir('evidence',{recursive:true});await page.screenshot({path:'evidence/history-layout.png',fullPage:true});
+  let releaseHistory;historyGate=new Promise(resolve=>releaseHistory=resolve);await page.locator('#reloadTransfers').click();await page.locator('#back').click();await page.locator('#walletSelect').selectOption(firstAddress);await page.waitForFunction(addr=>document.querySelector('#walletSelect')?.value===addr,firstAddress);
+  const requestsBefore=history.state.calls.length;historyGate=null;releaseHistory();await page.waitForFunction(()=>!!document.querySelector('#walletSelect'));await new Promise(r=>setTimeout(r,300));
+  assert.equal(history.state.calls.length,requestsBefore+1,'abandoned metadata response cannot trigger another request');assert.equal(await page.locator('#networkRows').count(),0);assert.equal(await page.locator('#walletSelect').inputValue(),firstAddress);
+  const raw='0x'+'11'.repeat(32),rawAddress=seedEntry(raw).address;
+  await page.locator('#addWatch').click();await page.locator('#watchAddress').fill(rawAddress);await page.locator('#watchName').fill('Public raw fixture');await page.locator('#watchPassword').fill(PASSWORD);await page.locator('#saveWatch').click();await page.waitForFunction(addr=>document.querySelector('#walletSelect')?.value===addr,rawAddress);
+  const walletCount=await page.locator('#walletSelect option').count(),rpcBeforeImport=network.state.requests.length;
+  await page.locator('#upgradeWatch').click();assert.equal(await page.locator('#expectedKeyAddress').inputValue(),rawAddress);
+  await page.locator('#keyText').fill(JSON.stringify({secretSeed:'0x'+'22'.repeat(32)}));await page.locator('#checkKey').click();await page.waitForFunction(()=>document.querySelector('#message')?.textContent.includes('другому кошельку'));assert.equal(await page.locator('#saveKey').isDisabled(),true);
+  await page.locator('#keyText').fill(JSON.stringify({secretSeed:raw,ss58Address:rawAddress}));await page.locator('#checkKey').click();await page.locator('#keyAddressCheck').check();await page.locator('#keyPassword').fill('incorrect-password');await page.locator('#saveKey').click();await page.waitForFunction(()=>document.querySelector('#message')?.textContent.includes('Неверный пароль'));
+  await page.locator('#keyPassword').fill(PASSWORD);await page.locator('#saveKey').click();await page.locator('#walletSelect').waitFor();assert.equal(await page.locator('#send').isDisabled(),false);assert.equal(await page.locator('#walletSelect option').count(),walletCount);assert.equal(network.state.requests.length,rpcBeforeImport);assert.ok(!store.get('save').includes(raw));
+  await page.locator('#settings').click();await page.locator('#settingsPassword').fill(PASSWORD);await page.locator('#showSeed').click();assert.equal(await page.locator('#backupSeed').inputValue(),raw);await page.locator('#back').click();
+  await page.locator('#lock').click();await page.locator('#unlockPassword').fill(PASSWORD);await page.locator('#unlock').click();await page.locator('#walletSelect').waitFor();assert.equal(await page.locator('#send').isDisabled(),false);
+  await page.locator('#send').click();await page.locator('#recipient').fill(network.bob);await page.locator('#amount').fill('0.1');await page.locator('#prepare').click();await page.locator('#sendPassword').fill(PASSWORD);await page.locator('#confirmPassword').click();await page.locator('#walletSelect').waitFor();assert.equal(network.state.submits.length,2);assert.equal(network.state.submits[1].signer,rawAddress);
+  await page.evaluate(()=>window.appBackground());await page.locator('#unlockPassword').waitFor();assert.equal(await page.locator('#seed,#backupSeed,#keyText').count(),0);assert.deepEqual(errors,[]);
+  // Simulate the existing 0.4.0 installation with its stored opt-in default.
+  const legacySettings={...JSON.parse(store.get('saveSettings')),selectedAddress:firstAddress,autoRefresh:false};delete legacySettings.autoRefreshVersion;
+  store.set('saveSettings',JSON.stringify(legacySettings));
+  await page.locator('#unlockPassword').fill(PASSWORD);await page.locator('#unlock').click();await page.locator('#walletSelect').waitFor();
+  await page.waitForFunction(()=>document.querySelector('#message')?.textContent.includes('Баланс проверен'));
+  assert.equal(JSON.parse(store.get('saveSettings')).autoRefreshVersion,1);assert.match(await page.locator('#autoBalance').textContent(),/вкл\./);
+  const reopeningBalance=balanceAccounts.length,reopeningHistory=history.state.calls.length;
+  await page.locator('#lock').click();await page.locator('#unlockPassword').fill(PASSWORD);await page.locator('#unlock').click();await page.locator('#walletSelect').waitFor();
+  await page.waitForFunction(()=>document.querySelector('#message')?.textContent.includes('Баланс проверен'));
+  assert.ok(balanceAccounts.length>reopeningBalance&&history.state.calls.length>reopeningHistory,'reopening within one minute must force both fresh reads');
+  await page.locator('#autoBalance').click();await page.locator('#lock').click();
+  await page.clock.install();await page.locator('#unlockPassword').fill(PASSWORD);await page.locator('#unlock').click();await page.locator('#walletSelect').waitFor();
+  assert.match(await page.locator('#autoBalance').textContent(),/выключено/,'explicit OFF survives unlock after migration');
+  await page.locator('#walletSelect').selectOption(firstAddress);await page.waitForFunction(addr=>document.querySelector('#walletSelect')?.value===addr,firstAddress);
+  await page.locator('#autoBalance').click();await page.clock.fastForward(1100);await page.waitForFunction(()=>document.querySelector('#balance')?.textContent.includes('100'));
+  await page.waitForFunction(()=>document.querySelector('#message')?.textContent.includes('Баланс проверен'));
+  assert.equal(balanceAccounts.at(-1),firstAddress);const autoCount=balanceAccounts.length,autoHistoryCount=history.state.calls.length;
+  await page.clock.fastForward(60000);await page.waitForFunction(()=>document.querySelector('#refresh')&&!document.querySelector('#refresh').disabled);await page.waitForFunction(()=>document.querySelector('#message')?.textContent.includes('Баланс проверен'));
+  assert.ok(balanceAccounts.length>autoCount);assert.equal(balanceAccounts.at(-1),firstAddress);assert.ok(history.state.calls.length>autoHistoryCount,'home updates incoming every minute');
+  const cachedIncoming=await page.locator('#incomingPreview').textContent();
+  network.state.offline=true;history.state.offline=true;await page.clock.fastForward(60000);await page.waitForFunction(()=>document.querySelector('#message')?.textContent.includes('offline'));
+  const failedRefreshRequests=network.state.requests.length;await page.clock.fastForward(59000);assert.equal(network.state.requests.length,failedRefreshRequests,'offline auto refresh must not hot-loop');
+  assert.ok((await page.locator('#balance').textContent()).includes('100'),'offline keeps last balance');assert.equal(await page.locator('#incomingPreview').textContent(),cachedIncoming,'offline keeps incoming preview');network.state.offline=false;history.state.offline=false;
+  await page.clock.fastForward(1100);await page.waitForFunction(()=>document.querySelector('#message')?.textContent.includes('Баланс проверен'));
+  await page.locator('#send').click();const onSendRequests=network.state.requests.length,onSendHistory=history.state.calls.length;await page.clock.fastForward(120000);assert.equal(network.state.requests.length,onSendRequests,'no automatic network work on the send form');assert.equal(history.state.calls.length,onSendHistory);await page.locator('#back').click();
+  await page.locator('#incoming').click();await page.waitForFunction(()=>document.querySelectorAll('#networkRows details').length===20);const beforeAutoHistory=history.state.calls.length;
+  await page.clock.fastForward(60000);await page.waitForFunction(()=>document.querySelector('#message')?.textContent==='');assert.ok(history.state.calls.length>beforeAutoHistory);
+  await page.locator('#back').click();await page.locator('#autoBalance').click();
+  await page.clock.fastForward(61000);const beforeStale=history.state.calls.length;await page.locator('#incoming').click();await page.waitForFunction(()=>document.querySelector('#message')?.textContent==='');assert.ok(history.state.calls.length>beforeStale,'expired cache refreshes on opening even if auto polling is off');
+  await page.evaluate(()=>window.appBackground());const lockedRequests=network.state.requests.length,lockedHistory=history.state.calls.length;await page.clock.fastForward(180000);assert.equal(network.state.requests.length,lockedRequests);assert.equal(history.state.calls.length,lockedHistory);
+  const report={passed:true,version:VERSION,create:true,multiWallet:true,ownAddressBook:true,localNames:true,autoRefreshDefaultOn:true,legacyDefaultMigrated:true,explicitOffPersists:true,unlockAlwaysRefreshes:true,homeIncomingPreview:true,homeIncomingAutoRefresh:true,offlineIncomingRetained:true,offlineCache:true,biometricCancelZeroSubmit:true,badPasswordZeroSubmit:true,syntheticSignatureVerified:true,nonceReservationAfterLock:true,wrongNetworkRejected:true,backgroundLock:true,watchOnly:true,lazyPaginatedFullHistory:true,historyPagination:true,historyErrorKeepsPage:true,cachedHistoryNoRequest:true,miningRewardsTab:true,lateHistoryResponseDiscarded:true,narrowScreenNoOverflow:true,externalBrowserOpened:false,rawSeedImport:true,watchUpgrade:true,wrongKeyRejected:true,zeroNetworkDuringImport:true,rawSeedBackupAndReload:true,rawSeedSyntheticSignatureVerified:true,incomingOutgoing:true,autoBalanceSelectedOnly:true,autoOpenHistory:true,staleCacheRefresh:true,lockedNoAutoRequests:true,realBroadcasts:0};
+  await writeFile('evidence/ui-tests.json',JSON.stringify(report,null,2));console.log(report);
+}finally{await browser.close();server.close();await network.close();}

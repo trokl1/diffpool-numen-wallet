@@ -1,0 +1,25 @@
+{
+  "name": "diffpool-numen-android-wallet",
+  "version": "0.5.0",
+  "private": true,
+  "type": "module",
+  "license": "ISC",
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "bundle": "esbuild ui.mjs --bundle --minify --target=chrome100 --outfile=web/app.js",
+    "test:live": "node scripts/check-live.mjs",
+    "test:ui": "node scripts/check-ui.mjs"
+  },
+  "dependencies": {
+    "@polkadot/api": "17.0.2",
+    "@polkadot/keyring": "14.0.3",
+    "@polkadot/util": "14.0.3",
+    "@polkadot/util-crypto": "14.0.3",
+    "qrcode": "1.5.4",
+    "jsqr": "1.4.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.12",
+    "playwright": "1.56.1"
+  }
+}
