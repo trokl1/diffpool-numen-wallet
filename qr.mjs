@@ -1,12 +1,13 @@
+import {t} from './i18n.mjs';
 import jsQR from 'jsqr';
 import {validateRecipient} from './core.mjs';
 
 // QR is untrusted input: never open URLs, change RPC, import keys or sign it.
 export function qrRecipient(value) {
-  if(typeof value!=='string'||value.length>2048)throw Error('QR не содержит адрес NUMEN.');
+  if(typeof value!=='string'||value.length>2048)throw Error(t('QR не содержит адрес NUMEN.'));
   const text=value.trim();
-  if(/^wc:/i.test(text))throw Error('Это QR подключения к сайту. WalletConnect пока не поддерживается; адрес получателя не изменён.');
-  if(!/^nu[1-9A-HJ-NP-Za-km-z]{40,60}$/.test(text))throw Error('Нужен QR с публичным адресом nu… сети NUMEN, не ссылка или ключ.');
+  if(/^wc:/i.test(text))throw Error(t('Это QR подключения к сайту. WalletConnect пока не поддерживается; адрес получателя не изменён.'));
+  if(!/^nu[1-9A-HJ-NP-Za-km-z]{40,60}$/.test(text))throw Error(t('Нужен QR с публичным адресом nu… сети NUMEN, не ссылка или ключ.'));
   return validateRecipient(text);
 }
 
@@ -33,7 +34,7 @@ export function cameraScanner(video,{onRead,onError,mediaDevices=navigator.media
         const value=decodeQr(ctx.getImageData(0,0,width,height).data,width,height);
         if(value!==null)onRead(value);
       }
-    }catch{onError('Не удалось прочитать кадр камеры. Закройте сканер и повторите.');stop();}
+    }catch{onError(t('Не удалось прочитать кадр камеры. Закройте сканер и повторите.'));stop();}
     if(!stopped)timer=setTimeout(frame,250);
   }
   async function start(){
@@ -44,7 +45,7 @@ export function cameraScanner(video,{onRead,onError,mediaDevices=navigator.media
       stream=next;video.srcObject=stream;await video.play();
       if(!stopped)frame();
     }catch(e){
-      if(!stopped)onError(e?.name==='NotAllowedError'?'Камера не разрешена. Разрешите её для DiffPool NUMEN в настройках Android и повторите.':'Камера недоступна. Адрес можно вставить вручную.');
+      if(!stopped)onError(e?.name==='NotAllowedError'?t('Камера не разрешена. Разрешите её для DiffPool NUMEN в настройках Android и повторите.'):t('Камера недоступна. Адрес можно вставить вручную.'));
       stop();
     }
   }

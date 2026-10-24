@@ -1,5 +1,7 @@
 package xyz.diffpool.numen;
 
+import static xyz.diffpool.numen.LocaleText.t;
+
 import android.app.Activity;
 import android.app.KeyguardManager;
 import android.hardware.biometrics.BiometricManager;
@@ -19,7 +21,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.KeyStore;
 import java.security.MessageDigest;
 import java.util.Arrays;
-import java.util.function.BooleanSupplier;
+import java.util.function.IntPredicate;
 import javax.crypto.Cipher;
 import javax.crypto.KeyGenerator;
 import javax.crypto.SecretKey;
@@ -32,7 +34,7 @@ final class BiometricVault {
  private static final String ALIAS="diffpool.numen.biometric.v1";
  private final Activity activity;
  private final File file, vault;
- private final BooleanSupplier foreground;
+ private final IntPredicate validSession;
  private final Result result;
  private final Handler handler=new Handler(Looper.getMainLooper());
  private Session active;
@@ -41,8 +43,8 @@ final class BiometricVault {
   String txid,address,amount,fee,total;
   CancellationSignal signal=new CancellationSignal(); Runnable timeout;
  }
- BiometricVault(Activity activity,File vault,BooleanSupplier foreground,Result result){
-  this.activity=activity;this.vault=vault;this.foreground=foreground;this.result=result;
+ BiometricVault(Activity activity,File vault,IntPredicate validSession,Result result){
+  this.activity=activity;this.vault=vault;this.validSession=validSession;this.result=result;
   file=new File(activity.getNoBackupFilesDir(),"biometric-password.bin");
  }
  private KeyStore store() throws Exception {KeyStore ks=KeyStore.getInstance("AndroidKeyStore");ks.load(null);return ks;}
@@ -58,7 +60,7 @@ final class BiometricVault {
  String status() throws Exception {
   int code=availability();
   return new JSONObject().put("available",code==0).put("enabled",file.exists()&&store().containsAlias(ALIAS))
-   .put("reason",code==0?"":"Добавьте отпечаток или защищённую биометрию и блокировку экрана в настройках Android.").toString();
+   .put("reason",code==0?"":t("Добавьте отпечаток или защищённую биометрию и блокировку экрана в настройках Android.")).toString();
  }
  synchronized void remove() throws Exception {new AtomicFile(file).delete();KeyStore ks=store();if(ks.containsAlias(ALIAS))ks.deleteEntry(ALIAS);}
  private SecretKey newKey() throws Exception {
@@ -85,40 +87,40 @@ final class BiometricVault {
   activity.runOnUiThread(()->start(id,null,false,transaction));
  }
  private void start(int id,byte[] plain,boolean enabling,Session transaction){
-  if(active!=null){if(plain!=null)Arrays.fill(plain,(byte)0);result.reply(id,false,"Биометрический запрос уже открыт.");return;}
+  if(active!=null){if(plain!=null)Arrays.fill(plain,(byte)0);result.reply(id,false,t("Биометрический запрос уже открыт."));return;}
   Session s=transaction==null?new Session():transaction;s.id=id;s.enabling=enabling;s.plaintext=plain;active=s;
   try{
-   if(!foreground.getAsBoolean()||activity.isFinishing()||activity.isDestroyed())throw new IOException("Приложение заблокировано.");
-   if(availability()!=0)throw new IOException("Нет доступной защищённой биометрии. Настройте её в Android или используйте пароль.");
+   if(!validSession.test(s.id)||activity.isFinishing()||activity.isDestroyed())throw new IOException(t("Приложение заблокировано."));
+   if(availability()!=0)throw new IOException(t("Нет доступной защищённой биометрии. Настройте её в Android или используйте пароль."));
    s.cipher=Cipher.getInstance("AES/GCM/NoPadding");
    if(enabling){
-    if(plain==null||plain.length<10||plain.length>10000)throw new IOException("Неверный пароль.");
+    if(plain==null||plain.length<10||plain.length>10000)throw new IOException(t("Неверный пароль."));
     s.cipher.init(Cipher.ENCRYPT_MODE,newKey());
    }else{
     byte[] saved=new AtomicFile(file).readFully();
-    if(saved.length<29||saved.length>12000)throw new IOException("Биометрический вход нужно настроить заново.");
+    if(saved.length<29||saved.length>12000)throw new IOException(t("Биометрический вход нужно настроить заново."));
     s.ciphertext=Arrays.copyOfRange(saved,12,saved.length);
     SecretKey key=(SecretKey)store().getKey(ALIAS,null);
-    if(key==null)throw new IOException("Биометрический ключ недоступен. Войдите по паролю.");
+    if(key==null)throw new IOException(t("Биометрический ключ недоступен. Войдите по паролю."));
     s.cipher.init(Cipher.DECRYPT_MODE,key,new GCMParameterSpec(128,Arrays.copyOfRange(saved,0,12)));
     Arrays.fill(saved,(byte)0);
    }
    s.binding=binding();
    BiometricPrompt.Builder prompt=new BiometricPrompt.Builder(activity)
-    .setTitle(enabling?"Включить биометрический вход":s.txid!=null?"Подтвердить отправку NUMN":"Открыть DiffPool NUMEN")
-    .setSubtitle(s.txid!=null?s.amount+" NUMN":"Подтвердите отпечатком или защищённой биометрией")
-    .setNegativeButton("Отмена",activity.getMainExecutor(),(dialog,which)->cancel("Биометрия отменена. Можно использовать пароль."));
+    .setTitle(enabling?t("Включить биометрический вход"):s.txid!=null?t("Подтвердить отправку NUMN"):t("Открыть DiffPool NUMEN"))
+    .setSubtitle(s.txid!=null?s.amount+" NUMN":t("Подтвердите отпечатком или защищённой биометрией"))
+    .setNegativeButton(t("Отмена"),activity.getMainExecutor(),(dialog,which)->cancel(t("Биометрия отменена. Можно использовать пароль.")));
    if(Build.VERSION.SDK_INT>=30)prompt.setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG);
-   if(s.txid!=null)prompt.setDescription("Получатель:\n"+s.address+"\nОценка комиссии: "+s.fee+" NUMN\nВсего: "+s.total+" NUMN");
-   s.timeout=()->cancel("Время подтверждения истекло. Попробуйте ещё раз или используйте пароль.");
+   if(s.txid!=null)prompt.setDescription(t("Получатель:\n")+s.address+t("\nОценка комиссии: ")+s.fee+t(" NUMN\nВсего: ")+s.total+" NUMN");
+   s.timeout=()->cancel(t("Время подтверждения истекло. Попробуйте ещё раз или используйте пароль."));
    handler.postDelayed(s.timeout,90000);
    prompt.build().authenticate(new BiometricPrompt.CryptoObject(s.cipher),s.signal,activity.getMainExecutor(),new BiometricPrompt.AuthenticationCallback(){
-    @Override public void onAuthenticationError(int code,CharSequence message){finish(s,false,"Биометрия: "+message+". Можно использовать пароль.");}
+    @Override public void onAuthenticationError(int code,CharSequence message){finish(s,false,t("Биометрия: ")+message+t(". Можно использовать пароль."));}
     @Override public void onAuthenticationSucceeded(BiometricPrompt.AuthenticationResult authentication){
      if(active!=s)return;
      try{
-      if(!foreground.getAsBoolean()||activity.isFinishing()||activity.isDestroyed())throw new IOException("Приложение заблокировано.");
-      if(authentication.getCryptoObject()==null||authentication.getCryptoObject().getCipher()==null)throw new IOException("Нет подтверждённой криптографической операции.");
+      if(!validSession.test(s.id)||activity.isFinishing()||activity.isDestroyed())throw new IOException(t("Приложение заблокировано."));
+      if(authentication.getCryptoObject()==null||authentication.getCryptoObject().getCipher()==null)throw new IOException(t("Нет подтверждённой криптографической операции."));
       Cipher authenticated=authentication.getCryptoObject().getCipher();
       // Keystore per-use operations must receive their auth token before updateAAD too.
       authenticated.updateAAD(s.binding);
@@ -134,10 +136,10 @@ final class BiometricVault {
        String password=new String(s.plaintext,StandardCharsets.UTF_8);
        finish(s,true,s.txid==null?password:new JSONObject().put("password",password).put("txid",s.txid).toString());
       }
-     }catch(Exception e){finish(s,false,"Биометрический ключ недоступен. Войдите по паролю и включите биометрию заново.");}
+     }catch(Exception e){finish(s,false,t("Биометрический ключ недоступен. Войдите по паролю и включите биометрию заново."));}
     }
    });
-  }catch(Exception e){finish(s,false,"Не удалось открыть защищённую биометрию. Используйте пароль и настройте её заново.");}
+  }catch(Exception e){finish(s,false,t("Не удалось открыть защищённую биометрию. Используйте пароль и настройте её заново."));}
  }
  private void finish(Session s,boolean ok,String value){
   if(active!=s)return;active=null;

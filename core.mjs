@@ -1,3 +1,4 @@
+import {t} from './i18n.mjs';
 import { Keyring } from '@polkadot/keyring';
 import { cryptoWaitReady, mnemonicGenerate, mnemonicValidate, decodeAddress, encodeAddress, blake2AsHex } from '@polkadot/util-crypto';
 import { NETWORK } from './config.mjs';
@@ -8,12 +9,12 @@ export function newMnemonic() { return mnemonicGenerate(12); }
 export function normalizeMnemonic(value) {
   const words = String(value).normalize('NFKD').trim().toLowerCase().split(/\s+/).join(' ');
   if (![12,15,18,21,24].includes(words.split(' ').length) || !mnemonicValidate(words))
-    throw Error('Неверная seed-фраза NUMEN/Substrate. Проверьте слова и порядок.');
+    throw Error(t('Неверная seed-фраза NUMEN/Substrate. Проверьте слова и порядок.'));
   return words;
 }
 export function validatePath(value = '') {
   // No secret URI passwords or arbitrary seed encodings hidden in the path field.
-  if (!/^(?:\/{1,2}[a-zA-Z0-9_-]{1,32}){0,8}$/.test(value)) throw Error('Путь: например //0 или //1. Поле можно оставить пустым.');
+  if (!/^(?:\/{1,2}[a-zA-Z0-9_-]{1,32}){0,8}$/.test(value)) throw Error(t('Путь: например //0 или //1. Поле можно оставить пустым.'));
   return value;
 }
 export function deriveAccount(mnemonic, path = '') {
@@ -25,35 +26,35 @@ export function walletEntry(mnemonic,path='') {
   try{return {mnemonic:words,path:derivation,address:pair.address};}finally{pair.lock();}
 }
 export function seedEntry(value,path='') {
-  if(typeof value!=='string'||!/^0x[0-9a-fA-F]{64}$/.test(value.trim()))throw Error('secretSeed: нужны ровно 32 байта (0x и 64 hex-символа), не publicKey и не 64-байтный secretKey.');
+  if(typeof value!=='string'||!/^0x[0-9a-fA-F]{64}$/.test(value.trim()))throw Error(t('secretSeed: нужны ровно 32 байта (0x и 64 hex-символа), не publicKey и не 64-байтный secretKey.'));
   const secretSeed=value.trim().toLowerCase(),derivation=validatePath(path),pair=new Keyring({type:'sr25519',ss58Format:NETWORK.ss58}).addFromUri(secretSeed+derivation);
   try{return {type:'sr25519',secretSeed,path:derivation,address:pair.address};}finally{pair.lock();}
 }
 function uriEntry(value){
-  if(typeof value!=='string'||value.length>1024)throw Error('Неверный формат секрета.');
+  if(typeof value!=='string'||value.length>1024)throw Error(t('Неверный формат секрета.'));
   const text=value.trim(),slash=text.indexOf('/'),base=slash<0?text:text.slice(0,slash),path=slash<0?'':text.slice(slash);
   validatePath(path);return base.startsWith('0x')?seedEntry(base,path):walletEntry(base,path);
 }
 export function importKey(value,expectedAddress=''){
-  if(typeof value!=='string'||new TextEncoder().encode(value).length>16384)throw Error('Файл ключа должен быть не больше 16 КБ.');
+  if(typeof value!=='string'||new TextEncoder().encode(value).length>16384)throw Error(t('Файл ключа должен быть не больше 16 КБ.'));
   const text=value.trim();let entry,doc=null;
   if(text.startsWith('{')){
-    try{doc=JSON.parse(text);}catch{throw Error('Некорректный JSON кошелька.');}
-    if(!doc||typeof doc!=='object'||Array.isArray(doc))throw Error('Нужен JSON-объект кошелька.');
-    if('encoded' in doc||'encoding' in doc)throw Error('Зашифрованный Polkadot JSON пока не поддерживается. Нужен наш signer JSON с secretPhrase/secretSeed.');
-    for(const field of ['type','cryptoType'])if(doc[field]!=null&&doc[field]!=='sr25519')throw Error('Поддерживается только sr25519.');
-    for(const field of ['genesis','genesisHash'])if(doc[field]!=null&&doc[field]!==NETWORK.genesis)throw Error('JSON относится к другой сети.');
-    if(doc.ss58Format!=null&&doc.ss58Format!==NETWORK.ss58)throw Error('Неверный SS58-префикс.');
+    try{doc=JSON.parse(text);}catch{throw Error(t('Некорректный JSON кошелька.'));}
+    if(!doc||typeof doc!=='object'||Array.isArray(doc))throw Error(t('Нужен JSON-объект кошелька.'));
+    if('encoded' in doc||'encoding' in doc)throw Error(t('Зашифрованный Polkadot JSON пока не поддерживается. Нужен наш signer JSON с secretPhrase/secretSeed.'));
+    for(const field of ['type','cryptoType'])if(doc[field]!=null&&doc[field]!=='sr25519')throw Error(t('Поддерживается только sr25519.'));
+    for(const field of ['genesis','genesisHash'])if(doc[field]!=null&&doc[field]!==NETWORK.genesis)throw Error(t('JSON относится к другой сети.'));
+    if(doc.ss58Format!=null&&doc.ss58Format!==NETWORK.ss58)throw Error(t('Неверный SS58-префикс.'));
     const phrase=doc.secretPhrase==null?null:uriEntry(doc.secretPhrase),seed=doc.secretSeed==null?null:seedEntry(doc.secretSeed);
-    if(!phrase&&!seed)throw Error('В JSON нет secretPhrase или secretSeed. Адрес/publicKey не даёт права отправки.');
-    if(phrase&&seed&&phrase.address!==seed.address)throw Error('secretPhrase и secretSeed дают разные адреса. Импорт отменён.');
+    if(!phrase&&!seed)throw Error(t('В JSON нет secretPhrase или secretSeed. Адрес/publicKey не даёт права отправки.'));
+    if(phrase&&seed&&phrase.address!==seed.address)throw Error(t('secretPhrase и secretSeed дают разные адреса. Импорт отменён.'));
     entry=phrase||seed;
-    for(const field of ['ss58Address','address'])if(doc[field]!=null&&validateRecipient(doc[field])!==entry.address)throw Error('Ключ не соответствует адресу в JSON.');
+    for(const field of ['ss58Address','address'])if(doc[field]!=null&&validateRecipient(doc[field])!==entry.address)throw Error(t('Ключ не соответствует адресу в JSON.'));
     if(doc.publicKey!=null){
-      if(typeof doc.publicKey!=='string'||!/^0x[0-9a-fA-F]{64}$/.test(doc.publicKey)||encodeAddress(doc.publicKey,NETWORK.ss58)!==entry.address)throw Error('Ключ не соответствует publicKey в JSON.');
+      if(typeof doc.publicKey!=='string'||!/^0x[0-9a-fA-F]{64}$/.test(doc.publicKey)||encodeAddress(doc.publicKey,NETWORK.ss58)!==entry.address)throw Error(t('Ключ не соответствует publicKey в JSON.'));
     }
   }else entry=uriEntry(text);
-  if(expectedAddress&&validateRecipient(expectedAddress)!==entry.address)throw Error('Импортируемый ключ относится к другому кошельку. Проверьте файл и адрес.');
+  if(expectedAddress&&validateRecipient(expectedAddress)!==entry.address)throw Error(t('Импортируемый ключ относится к другому кошельку. Проверьте файл и адрес.'));
   return entry;
 }
 export function addKeyWallet(secret,entry){
@@ -61,16 +62,16 @@ export function addKeyWallet(secret,entry){
 }
 export function clearSecret(secret){secret?.wallets?.forEach(e=>{e.mnemonic='';e.secretSeed='';});}
 export function normalizeSecret(secret) {
-  if(secret.network!==NETWORK.genesis||secret.type!=='sr25519')throw Error('Неверная сеть/тип ключа.');
+  if(secret.network!==NETWORK.genesis||secret.type!=='sr25519')throw Error(t('Неверная сеть/тип ключа.'));
   const entries=secret.wallets??[{mnemonic:secret.mnemonic,path:secret.path}];
-  if(!Array.isArray(entries)||!entries.length||entries.length>20)throw Error('Допускается от 1 до 20 кошельков.');
+  if(!Array.isArray(entries)||!entries.length||entries.length>20)throw Error(t('Допускается от 1 до 20 кошельков.'));
   const wallets=entries.map(e=>{
     if(e.type==='watch')return {type:'watch',address:validateRecipient(e.address)};
-    if(e.type&&e.type!=='sr25519')throw Error('Неизвестный тип кошелька.');
-    if(e.secretSeed&&e.mnemonic)throw Error('Неоднозначный формат ключа.');
-    const entry=e.secretSeed?seedEntry(e.secretSeed,e.path):walletEntry(e.mnemonic,e.path);if(e.address&&e.address!==entry.address)throw Error('Адрес не соответствует ключу.');return entry;
+    if(e.type&&e.type!=='sr25519')throw Error(t('Неизвестный тип кошелька.'));
+    if(e.secretSeed&&e.mnemonic)throw Error(t('Неоднозначный формат ключа.'));
+    const entry=e.secretSeed?seedEntry(e.secretSeed,e.path):walletEntry(e.mnemonic,e.path);if(e.address&&e.address!==entry.address)throw Error(t('Адрес не соответствует ключу.'));return entry;
   });
-  if(new Set(wallets.map(w=>w.address)).size!==wallets.length)throw Error('Повторяющийся кошелёк.');
+  if(new Set(wallets.map(w=>w.address)).size!==wallets.length)throw Error(t('Повторяющийся кошелёк.'));
   return {network:NETWORK.genesis,type:'sr25519',wallets};
 }
 export function addWallet(secret,mnemonic,path='') {
@@ -84,9 +85,9 @@ export function addWatchWallet(secret,address) {
 }
 export function pairForWallet(secret,address) {
   const wallet=secret.wallets.find(e=>e.address===address);
-  if(!wallet||wallet.type==='watch')throw Error('Только просмотр: ключ выбранного кошелька отсутствует.');
-  if(wallet.secretSeed){const checked=seedEntry(wallet.secretSeed,wallet.path);if(checked.address!==address)throw Error('Ключ не соответствует выбранному адресу.');return new Keyring({type:'sr25519',ss58Format:NETWORK.ss58}).addFromUri(checked.secretSeed+checked.path);}
-  const pair=deriveAccount(wallet.mnemonic,wallet.path);if(pair.address!==address){pair.lock();throw Error('Ключ не соответствует выбранному адресу.');}return pair;
+  if(!wallet||wallet.type==='watch')throw Error(t('Только просмотр: ключ выбранного кошелька отсутствует.'));
+  if(wallet.secretSeed){const checked=seedEntry(wallet.secretSeed,wallet.path);if(checked.address!==address)throw Error(t('Ключ не соответствует выбранному адресу.'));return new Keyring({type:'sr25519',ss58Format:NETWORK.ss58}).addFromUri(checked.secretSeed+checked.path);}
+  const pair=deriveAccount(wallet.mnemonic,wallet.path);if(pair.address!==address){pair.lock();throw Error(t('Ключ не соответствует выбранному адресу.'));}return pair;
 }
 export function validateRecipient(value) {
   const address = String(value).trim();
@@ -94,14 +95,14 @@ export function validateRecipient(value) {
     const key = decodeAddress(address, false, NETWORK.ss58);
     if (key.length !== 32 || encodeAddress(key, NETWORK.ss58) !== address) throw Error();
     return address;
-  } catch { throw Error('Нужен родной адрес NUMEN nu… с верной контрольной суммой, не 0x/EVM.'); }
+  } catch { throw Error(t('Нужен родной адрес NUMEN nu… с верной контрольной суммой, не 0x/EVM.')); }
 }
 export function parseAmount(value) {
   const text = String(value).trim().replace(',', '.');
-  if (!/^(0|[1-9]\d{0,20})(?:\.\d{1,18})?$/.test(text)) throw Error('Сумма: положительное число, не более 18 знаков после точки.');
+  if (!/^(0|[1-9]\d{0,20})(?:\.\d{1,18})?$/.test(text)) throw Error(t('Сумма: положительное число, не более 18 знаков после точки.'));
   const [integer, fraction = ''] = text.split('.');
   const amount = BigInt(integer) * UNIT + BigInt(fraction.padEnd(18, '0'));
-  if (amount <= 0n || amount >= 2n ** 128n) throw Error('Сумма вне допустимого диапазона.');
+  if (amount <= 0n || amount >= 2n ** 128n) throw Error(t('Сумма вне допустимого диапазона.'));
   return amount;
 }
 export function formatAmount(value) {
@@ -115,12 +116,12 @@ export function spendable({ free, frozen = '0', miscFrozen = '0', feeFrozen = '0
   return available > 0n ? available : 0n;
 }
 export function validatePassword(password) {
-  if (typeof password !== 'string' || password.length < 10 || password.length > 256) throw Error('Пароль: от 10 до 256 символов.');
+  if (typeof password !== 'string' || password.length < 10 || password.length > 256) throw Error(t('Пароль: от 10 до 256 символов.'));
 }
 const encoder = new TextEncoder(), decoder = new TextDecoder();
 const toHex = bytes => Array.from(bytes, x => x.toString(16).padStart(2,'0')).join('');
 function fromHex(value, length) {
-  if (typeof value !== 'string' || !/^(?:[0-9a-f]{2})+$/.test(value) || (length && value.length !== length * 2)) throw Error('Хранилище повреждено.');
+  if (typeof value !== 'string' || !/^(?:[0-9a-f]{2})+$/.test(value) || (length && value.length !== length * 2)) throw Error(t('Хранилище повреждено.'));
   return Uint8Array.from(value.match(/../g), x => parseInt(x,16));
 }
 async function vaultKey(password, salt) {
@@ -149,6 +150,6 @@ export async function decryptVault(raw, password) {
     try {
       return normalizeSecret(JSON.parse(decoder.decode(plain)));
     } finally { plain.fill(0); }
-  } catch { throw Error('Неверный пароль или повреждённое хранилище.'); }
+  } catch { throw Error(t('Неверный пароль или повреждённое хранилище.')); }
 }
 export function intentHash(value) { return blake2AsHex(encoder.encode(JSON.stringify(value)),256); }

@@ -26,7 +26,7 @@ try{
   await page.exposeFunction('nativeQA',async(action,data)=>{
     actions.push(action);
     if(action==='importFileStatus')return 'none';
-    if(action==='cancelImportFile')return 'ok';
+    if(action==='cancelImportFile'||action==='invalidate')return 'ok';
     if(action==='historyRequest'){if(historyGate)await historyGate;return history.request(data);}
     if(action==='request'){if(data.method==='system_accountNextIndex')balanceAccounts.push(data.params[0]);return JSON.stringify({jsonrpc:'2.0',id:1,result:await network.request(data.endpoint,data.method,data.params)});}
     if(action==='biometricStatus')return JSON.stringify({available:true,enabled:enabledBio});
@@ -35,14 +35,14 @@ try{
     if(action==='biometricUnlock')return PASSWORD;
     if(action==='biometricConfirm'){if(cancelBio)throw Error('QA cancelled biometric');return JSON.stringify({password:PASSWORD,txid:data.txid});}
     if(action.startsWith('load'))return store.get(action.replace('load','save'))||'';
-    if(action.startsWith('save')){store.set(action,data);if(action==='save')enabledBio=false;return 'ok';}
+    if(action.startsWith('save')){if(action==='save'){assert.equal(data.previous,store.get('save')||'');enabledBio=false;data=data.encrypted;}store.set(action,data);return 'ok';}
     if(action==='copy'||action==='openExplorer')return 'ok';
     throw Error('Unknown native action '+action);
   });
   await page.addInitScript(()=>{window.Android={call:(id,action,json)=>window.nativeQA(action,JSON.parse(json)).then(value=>window.nativeResult(id,true,value),error=>window.nativeResult(id,false,error.message))};});
   await page.goto(`http://127.0.0.1:${server.address().port}`);
   await page.locator('#create').click();
-  const seed=await page.locator('#seed').inputValue();assert.equal(seed.split(' ').length,12);
+  const seed=await page.locator('#seed').textContent();assert.equal(seed.split(' ').length,12);
   await page.locator('#password').fill(PASSWORD);await page.locator('#repeat').fill(PASSWORD);
   await page.locator('#word3').fill(seed.split(' ')[2]);await page.locator('#word9').fill(seed.split(' ')[8]);await page.locator('#backupCheck').check();await page.locator('#name').fill('Первый');
   await page.locator('#saveWallet').click();await page.locator('#walletSelect').waitFor();
@@ -102,7 +102,7 @@ try{
   await page.locator('#keyText').fill(JSON.stringify({secretSeed:'0x'+'22'.repeat(32)}));await page.locator('#checkKey').click();await page.waitForFunction(()=>document.querySelector('#message')?.textContent.includes('другому кошельку'));assert.equal(await page.locator('#saveKey').isDisabled(),true);
   await page.locator('#keyText').fill(JSON.stringify({secretSeed:raw,ss58Address:rawAddress}));await page.locator('#checkKey').click();await page.locator('#keyAddressCheck').check();await page.locator('#keyPassword').fill('incorrect-password');await page.locator('#saveKey').click();await page.waitForFunction(()=>document.querySelector('#message')?.textContent.includes('Неверный пароль'));
   await page.locator('#keyPassword').fill(PASSWORD);await page.locator('#saveKey').click();await page.locator('#walletSelect').waitFor();assert.equal(await page.locator('#send').isDisabled(),false);assert.equal(await page.locator('#walletSelect option').count(),walletCount);assert.equal(network.state.requests.length,rpcBeforeImport);assert.ok(!store.get('save').includes(raw));
-  await page.locator('#settings').click();await page.locator('#settingsPassword').fill(PASSWORD);await page.locator('#showSeed').click();assert.equal(await page.locator('#backupSeed').inputValue(),raw);await page.locator('#back').click();
+  await page.locator('#settings').click();await page.locator('#settingsPassword').fill(PASSWORD);await page.locator('#showSeed').click();assert.equal(await page.locator('#backupSeed').textContent(),raw);await page.locator('#back').click();
   await page.locator('#lock').click();await page.locator('#unlockPassword').fill(PASSWORD);await page.locator('#unlock').click();await page.locator('#walletSelect').waitFor();assert.equal(await page.locator('#send').isDisabled(),false);
   await page.locator('#send').click();await page.locator('#recipient').fill(network.bob);await page.locator('#amount').fill('0.1');await page.locator('#prepare').click();await page.locator('#sendPassword').fill(PASSWORD);await page.locator('#confirmPassword').click();await page.locator('#walletSelect').waitFor();assert.equal(network.state.submits.length,2);assert.equal(network.state.submits[1].signer,rawAddress);
   await page.evaluate(()=>window.appBackground());await page.locator('#unlockPassword').waitFor();assert.equal(await page.locator('#seed,#backupSeed,#keyText').count(),0);assert.deepEqual(errors,[]);

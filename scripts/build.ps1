@@ -17,6 +17,7 @@ $mode=if($Qa){'qa'}else{'release'}
 $dest=Join-Path $PWD "build\$mode"
 New-Item -ItemType Directory -Force $dest,"$dest\classes","$dest\dex","$dest\assets" | Out-Null
 & npm.cmd run bundle;Check
+& node scripts/localization.mjs;Check
 Copy-Item web/* "$dest\assets" -Force
 & node scripts/notices.mjs;Check
 Copy-Item THIRD-PARTY-NOTICES.txt "$dest\assets" -Force

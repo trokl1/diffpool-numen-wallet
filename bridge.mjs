@@ -1,9 +1,14 @@
+import {t} from './i18n.mjs';
 let sequence=0;
 const calls=new Map();
+export function cancelNativeCalls() {
+  for(const call of calls.values()){clearTimeout(call.timer);call.reject(Error(t('Операция отменена: кошелёк заблокирован.')));}
+  calls.clear();
+}
 export function native(action,data='') {
   return new Promise((resolve,reject)=>{
-    if(!globalThis.Android?.call)return reject(Error('Для хранения ключей нужен Android APK. Браузерный режим не хранит кошелёк.'));
-    const id=++sequence,timer=setTimeout(()=>{calls.delete(id);reject(Error(action==='request'?'RPC не ответил. Если это отправка — её исход неизвестен.':'Истекло время операции.'));},action.startsWith('biometric')?100000:40000);
+    if(!globalThis.Android?.call)return reject(Error(t('Для хранения ключей нужен Android APK. Браузерный режим не хранит кошелёк.')));
+    const id=++sequence,timer=setTimeout(()=>{calls.delete(id);reject(Error(action==='request'?t('RPC не ответил. Если это отправка — её исход неизвестен.'):t('Истекло время операции.')));},action.startsWith('biometric')?100000:40000);
     calls.set(id,{resolve,reject,timer});
     Android.call(id,action,JSON.stringify(data));
   });
@@ -14,8 +19,8 @@ globalThis.nativeResult=(id,ok,value)=>{
 };
 export async function transport(endpoint,method,params){
   const data=JSON.parse(await native('request',{endpoint,method,params}));
-  if(data.jsonrpc!=='2.0'||data.id!==1)throw Error('Некорректный ответ RPC.');
+  if(data.jsonrpc!=='2.0'||data.id!==1)throw Error(t('Некорректный ответ RPC.'));
   if(data.error)throw Error(`RPC: ${String(data.error.message).slice(0,250)}`);
-  if(!Object.hasOwn(data,'result'))throw Error('В ответе RPC нет результата.');
+  if(!Object.hasOwn(data,'result'))throw Error(t('В ответе RPC нет результата.'));
   return data.result;
 }

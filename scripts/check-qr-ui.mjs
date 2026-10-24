@@ -29,7 +29,7 @@ try{
     if(action==='request'){assert.notEqual(data.method,'author_submitExtrinsic');return JSON.stringify({jsonrpc:'2.0',id:1,result:await network.request(data.endpoint,data.method,data.params)});}
     if(action==='biometricStatus')return JSON.stringify({available:false,enabled:false});
     if(action==='importFileStatus')return 'none';
-    if(['beginQrScan','endQrScan','copy'].includes(action))return 'ok';
+    if(['beginQrScan','endQrScan','copy','invalidate'].includes(action))return 'ok';
     if(action==='shareQr'){shares.push(data);return 'opened';}
     if(action.startsWith('load'))return store.get(action.replace('load','save'))||'';
     if(action.startsWith('save')){store.set(action,data);return 'ok';}

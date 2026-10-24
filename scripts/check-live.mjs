@@ -19,7 +19,7 @@ try{
   const options=chain.options(snapshot);
   const recipient=deriveAccount('bottom drive obey lake curtain smoke basket hold race lonely fit walk','//1').address;
   const tx=api.tx.balances.transferKeepAlive(recipient,'1');
-  tx.sign(pair,options);
+  tx.signFake(pair.address,options);
   const fee=await api.call.transactionPaymentApi.queryInfo(tx.toU8a(),tx.toU8a().length);
   const decoded=api.tx(tx.toHex());
   assert.equal(decoded.method.section,'balances');assert.equal(decoded.method.method,'transferKeepAlive');

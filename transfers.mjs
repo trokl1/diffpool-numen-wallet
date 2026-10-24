@@ -1,3 +1,4 @@
+import {t} from './i18n.mjs';
 // Read model only. Never supplies balance, nonce, signing or payout decisions.
 import { decodeAddress,encodeAddress } from '@polkadot/util-crypto';
 import { NETWORK } from './config.mjs';
@@ -8,10 +9,10 @@ export const HISTORY_TTL_MS=60000;
 export function historyStale(page,now=Date.now()){return !page||now-page.updatedAt>=HISTORY_TTL_MS||page.updatedAt>now;}
 export const POOL_WALLETS=Object.freeze([
   {name:'FEE DiffPool',address:'nu4dxPMnaPXN4ZRWJaUM6RnSY8zuhi1NrYiR7Nfh42wB9YAxr'},
-  {name:'POOL · награды',address:'nu327rmGPkjwfAHWQPB8R87bbnDYbzeX5YK1h7QMfGnq9WWpS'},
-  {name:'Личный майнинг',address:'nu4NMRnsC8dF6tfva2ZsiD4aV83hZDeeAzB16pNJG6YGwzNfj'},
+  {get name(){return t('POOL · награды');},address:'nu327rmGPkjwfAHWQPB8R87bbnDYbzeX5YK1h7QMfGnq9WWpS'},
+  {get name(){return t('Личный майнинг');},address:'nu4NMRnsC8dF6tfva2ZsiD4aV83hZDeeAzB16pNJG6YGwzNfj'},
 ]);
-const bad=()=>{throw Error('История: некорректный ответ индексатора.');};
+const bad=()=>{throw Error(t('История: некорректный ответ индексатора.'));};
 const height=n=>{if(!Number.isInteger(n)||n<0||n>=2147483647)bad();return n;};
 const hash=s=>{if(typeof s!=='string'||!/^0x[0-9a-f]{64}$/.test(s))bad();return s;};
 const identifier=s=>{if(typeof s!=='string'||!s.length||s.length>100||!/^[a-zA-Z0-9_-]+$/.test(s))bad();return s;};
@@ -21,7 +22,7 @@ const account=s=>encodeAddress(hash(s),NETWORK.ss58);
 export function accountHex(address){return '0x'+Array.from(decodeAddress(validateRecipient(address)),n=>n.toString(16).padStart(2,'0')).join('');}
 export function decodeHistoryResponse(raw){
   if(typeof raw!=='string'||new TextEncoder().encode(raw).length>65536)bad();
-  const data=JSON.parse(raw);if(data.errors?.length)throw Error('Индексатор истории вернул ошибку. Повторите позже.');
+  const data=JSON.parse(raw);if(data.errors?.length)throw Error(t('Индексатор истории вернул ошибку. Повторите позже.'));
   if(!data.data||typeof data.data!=='object')bad();return data.data;
 }
 export function validateAnchor(a){
@@ -31,8 +32,8 @@ export function validateAnchor(a){
 export function parseMeta(data){
   const info=data.chainInfos?.[0],latest=data.latest?.[0];
   if(data.genesis?.[0]?.hash!==NETWORK.genesis||info?.symbol!==NETWORK.symbol||info?.decimals!==18||info?.ss58!==NETWORK.ss58)
-    throw Error('История: индексатор другой сети.');
-  if(!latest)throw Error('История ещё не проиндексирована.');
+    throw Error(t('История: индексатор другой сети.'));
+  if(!latest)throw Error(t('История ещё не проиндексирована.'));
   height(info.finalizedHead);if(latest.height>info.finalizedHead)bad();
   return validateAnchor({...latest,head:info.head});
 }
@@ -44,7 +45,7 @@ export function pageRequest(address,kind,anchor,cursor=null){
 }
 export function parsePage(data,address,kind,anchor,cursor=null,now=Date.now()){
   const request=pageRequest(address,kind,anchor,cursor);
-  if(data.anchorBlock?.[0]?.hash!==anchor.hash)throw Error('Снимок истории изменился. Обновите с первой страницы.');
+  if(data.anchorBlock?.[0]?.hash!==anchor.hash)throw Error(t('Снимок истории изменился. Обновите с первой страницы.'));
   if(!Array.isArray(data.rows)||data.rows.length>PAGE_SIZE+1)bad();
   let previous=cursor,seen=new Set();
   const rows=data.rows.map(row=>{
