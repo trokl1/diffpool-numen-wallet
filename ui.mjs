@@ -1,11 +1,12 @@
 import {t,getLanguage,setLanguage,locale} from './i18n.mjs';
 import QRCode from 'qrcode';
-import { NETWORK, VERSION, validateEndpoint } from './config.mjs';
+import { NETWORK, VERSION, DONATION_ADDRESS, validateEndpoint } from './config.mjs';
 import { initCrypto,newMnemonic,normalizeMnemonic,validatePath,validateRecipient,encryptVault,decryptVault,formatAmount,validatePassword,addWallet,addWatchWallet,pairForWallet,importKey,addKeyWallet,clearSecret } from './core.mjs';
 import { TransferHistory,POOL_WALLETS,readTransferCache,writeTransferCache,rememberPage,historyStale } from './transfers.mjs';
 import { readContacts,writeContacts,saveContact,contactName } from './contacts.mjs';
 import { readHistory,writeHistory,submitOnce } from './history.mjs';
 import { Chain } from './chain.mjs';
+import {IDENTITY_FIELDS,validateIdentity} from './identity.mjs';
 import { walletSettings } from './settings.mjs';
 import {cameraScanner,qrRecipient} from './qr.mjs';
 import { native,transport,cancelNativeCalls } from './bridge.mjs';
@@ -16,6 +17,7 @@ const shorten=s=>s.slice(0,10)+'…'+s.slice(-8);
 let session=0,view=0,address=null,accounts=[],vault='',cache=null,contacts=[],journal=[],journalError=false,contactsError=false;
 let settings=walletSettings(),chain=null,prepared=null,biometric={available:false,enabled:false},busySend=false;
 let transferPages=[];
+let identityProfile=null;
 // Only the public address survives the system picker; never retain its secret input.
 let pendingImportAddress='';
 let viewTimer=null,refreshing=false,lastBalanceAttempt={key:'',at:0};
@@ -217,10 +219,21 @@ async function unlock(password,notify=true,context={s:session,v:view}){
   if(warnings.length)message(warnings.join(' '),true);else if(notify)message(settings.autoRefresh?t('Кошелёк открыт. Автообновление включено.'):t('Открыто офлайн. Для свежего баланса нажмите «Обновить» или включите автообновление.'));
   await resumeImport();
 }
+function balanceMarkup(){
+  const exact=cache?formatAmount(cache.free):'—';
+  const [whole,fraction='']=exact.split('.');
+  // Display-only string shortening: keep all tiny balances and never round up.
+  // Money arithmetic and transfer inputs continue using the exact integer units.
+  const digits=whole==='0'?18:Math.min(6,Math.max(0,16-whole.length));
+  const shownFraction=fraction.slice(0,digits).replace(/0+$/,'');
+  const short=whole+(shownFraction?'.'+shownFraction:''),approximate=short!==exact;
+  const label=(approximate?'≈ ':'')+short;
+  return `<h1 id="balance" class="${label.length>14?'balance-compact':''}"><span id="balanceValue">${esc(label)}</span><small>NUMN</small></h1>`+(cache?t`<details id="balanceDetails"><summary>Точный баланс</summary><p id="exactBalance" class="address">${esc(exact)} NUMN</p><p class="foot">Все знаки после запятой. Краткая строка выше может быть приблизительной.</p></details>`:'');
+}
 function home(){
   if(!address)return;
   prepared=null;
-  render(t`<div class="top"><div class="brand">NUMEN<small>DIFFPOOL WALLET</small></div><div class="toolbar"><button id="settings" class="small secondary">Настройки</button><button id="lock" class="small secondary">Закрыть</button></div></div><section class="card wallet-overview"><div class="badge">MAINNET · ${VERSION} BETA</div><button id="rename" class="wallet-name">${esc(nameOf(address))} ✎</button><h1 id="balance">${cache?esc(formatAmount(cache.free)):'—'} <small>NUMN</small></h1><div class="address-line"><span id="address" class="compact-address">${esc(shorten(address))}</span><button id="copy" class="small secondary">Копия</button></div><p class="foot" id="lastUpdate">${cache?t('Сохранённый снимок: ')+esc(new Date(cache.updatedAt).toLocaleString(locale()))+t('. Не текущий баланс.'):t('Баланс ещё не проверен.')}</p>${cache?t`<p class="foot">Доступно до комиссии: ${esc(formatAmount(cache.available))} NUMN<br>Резерв/блокировки учитываются. Высота ${cache.height}, финализировано ${cache.finalizedHeight}.</p>`:''}<button id="refresh">Обновить баланс и отправки</button><div class="actions"><button id="receive" class="secondary">Получить</button><button id="send" ${journalError?'disabled':''}>Отправить</button></div></section><section class="card"><h2>Отправки из приложения</h2><p class="foot">Локальный журнал отправок с телефона. Входящие, отправки с других устройств и награды доступны по кнопке истории адреса.</p>${historyRows(5)}<button id="history" class="secondary">Все локальные отправки</button><button id="explorer" class="secondary">Вся история адреса · внутри кошелька</button></section><button id="contacts" class="secondary">Адресная книга · ${contacts.length}</button><p class="foot">RPC: ${esc(settings.endpoint)}<br>Комиссия разработчика: 0%. Сетевая комиссия остаётся.</p>`);
+  render(t`<div class="top"><div class="brand">NUMEN<small>DIFFPOOL WALLET</small></div><div class="toolbar"><button id="settings" class="small secondary">Настройки</button><button id="lock" class="small secondary">Закрыть</button></div></div><section class="card wallet-overview"><div class="badge">MAINNET · ${VERSION} BETA</div><button id="rename" class="wallet-name">${esc(nameOf(address))} ✎</button>${balanceMarkup()}<div class="address-line"><span id="address" class="compact-address">${esc(shorten(address))}</span><button id="copy" class="small secondary">Копия</button></div><p class="foot" id="lastUpdate">${cache?t('Сохранённый снимок: ')+esc(new Date(cache.updatedAt).toLocaleString(locale()))+t('. Не текущий баланс.'):t('Баланс ещё не проверен.')}</p>${cache?t`<p class="foot">Доступно до комиссии: ${esc(formatAmount(cache.available))} NUMN<br>Резерв/блокировки учитываются. Высота ${cache.height}, финализировано ${cache.finalizedHeight}.</p>`:''}<button id="refresh">Обновить баланс и отправки</button><div class="actions"><button id="receive" class="secondary">Получить</button><button id="send" ${journalError?'disabled':''}>Отправить</button></div></section><section class="card"><h2>Отправки из приложения</h2><p class="foot">Локальный журнал отправок с телефона. Входящие, отправки с других устройств и награды доступны по кнопке истории адреса.</p>${historyRows(5)}<button id="history" class="secondary">Все локальные отправки</button><button id="explorer" class="secondary">Вся история адреса · внутри кошелька</button></section><button id="contacts" class="secondary">Адресная книга · ${contacts.length}</button><p class="foot">RPC: ${esc(settings.endpoint)}<br>Комиссия разработчика: 0%. Сетевая комиссия остаётся.</p>`);
   const networkHistory=document.createElement('section');networkHistory.className='card';networkHistory.id='networkHistory';
   const incomingPage=transferPages.find(p=>p.address===address&&p.kind==='incoming');
   networkHistory.innerHTML=t`<h2>Последние входящие</h2><section id="incomingPreview">${incomingPage?(incomingPage.rows.length?incomingPage.rows.slice(0,3).map(r=>t`<details class="transfer"><summary><div class="transfer-info"><strong>${r.from===address?t('Себе'):t('Входящий')}</strong><small>${esc(new Date(r.timestamp).toLocaleString(locale()))}</small></div><span class="transfer-amount">${r.from===address?'':'+'}${esc(formatAmount(r.amount))} NUMN</span></summary><div class="transfer-detail"><p>Отправитель</p><p class="address">${esc(r.from)}</p><p>Блок #${r.height} · финализировано по данным индексатора</p></div></details>`).join(''):t('<p>В проиндексированной истории входящих пока нет.</p>')):t('<p>Входящие ещё не загружены.</p>')}</section><p id="incomingUpdate" class="foot">${incomingPage?t('Сохранённая история: ')+esc(new Date(incomingPage.updatedAt).toLocaleString(locale()))+'. ':''}Индексатор может отставать от баланса. Полная история — по 20 записей за страницу.</p><div class="actions"><button id="incoming">Все входящие</button></div>`;
@@ -235,6 +248,12 @@ function home(){
   action('addWallet',()=>setup(true,true));action('importWallet',()=>setup(false,true));
   const watch=document.createElement('button');watch.id='addWatch';watch.className='secondary';watch.textContent=t('+ По адресу · только просмотр');picker.append(watch);action('addWatch',()=>watchSetup(true));
   action('receive',()=>receive());action('send',()=>sendScreen());action('contacts',()=>book());action('history',()=>historyScreen());action('explorer',()=>networkHistoryScreen());action('refresh',refresh);
+  const profileButton=document.createElement('button');profileButton.id='identity';profileButton.className='secondary';
+  const known=identityProfile?.address===address&&identityProfile?.endpoint===settings.endpoint?identityProfile:null;
+  profileButton.textContent=t('Публичный профиль · Identity')+(known?.info.display?' · '+known.info.display:'');$('contacts').before(profileButton);action('identity',identityScreen);
+  const donation=document.createElement('footer');donation.className='donation';donation.id='donation';
+  donation.innerHTML=t`<h2>Поддержать разработку</h2><p class="foot">Добровольное пожертвование на развитие кошелька. Сумму выбираете вы; отправка только после подтверждения.</p><p class="address">${esc(DONATION_ADDRESS)}</p><div class="actions"><button id="donate" class="secondary" ${watchOnly()||journalError||address===DONATION_ADDRESS?'disabled':''}>Пожертвовать NUMN</button><button id="copyDonation" class="secondary">Копировать адрес</button></div>`;$('app').append(donation);
+  action('donate',()=>sendScreen(DONATION_ADDRESS));action('copyDonation',()=>native('copy',DONATION_ADDRESS));
   const scan=document.createElement('button');scan.id='scanQr';scan.className='icon-button secondary';scan.title=t('Сканировать QR получателя');scan.setAttribute('aria-label',t('Сканировать QR получателя'));scan.innerHTML=qrIcon;scan.disabled=watchOnly();$('copy').after(scan);action('scanQr',()=>scanScreen());
   $('refresh').textContent=t('Обновить баланс и переводы');
   if(watchOnly()){$('send').disabled=true;$('send').textContent=t('Только просмотр');const note=document.createElement('p');note.className='foot';note.textContent=t('Только просмотр · ключ на этом устройстве отсутствует');$('rename').after(note);const key=document.createElement('button');key.id='upgradeWatch';key.className='secondary';key.textContent=t('Импортировать ключ этого адреса');$('send').parentElement.after(key);action('upgradeWatch',()=>keySetup(true,address));}
@@ -247,6 +266,7 @@ async function refresh(){
   const errors=[];
   await Promise.all([
     (async()=>{try{const snapshot=await getChain().snapshot(owner);alive(s,v);cache={...snapshot,genesis:NETWORK.genesis,endpoint:settings.endpoint};await native('saveCache',JSON.stringify(cache));}catch(e){errors.push(t('Баланс: ')+e.message);}})(),
+    (async()=>{try{const profile=await getChain().identity(owner);alive(s,v);identityProfile={...profile,endpoint:settings.endpoint};}catch(e){errors.push('Identity: '+e.message);}})(),
     (async()=>{try{
       const api=new TransferHistory(data=>native('historyRequest',data)),anchor=await api.meta();alive(s,v);
       const page=await api.page(owner,'incoming',anchor);alive(s,v);
@@ -263,7 +283,35 @@ async function refresh(){
 function historyRows(limit=500){
   const statuses={submitted:t('Принято RPC, ещё не подтверждено'),unknown:t('Исход неизвестен — проверьте'),finalized:t('Финализировано · успешно'),failed:t('Финализировано · ошибка выполнения'),expired:t('Срок истёк · в финализированных блоках не найдена')};
   const rows=journal.filter(e=>e.address===address).slice(0,limit);
-  return rows.length?rows.map(e=>t`<details class="transfer"><summary><div class="transfer-info"><strong>${esc(shorten(e.recipient))}</strong><small>${esc(statuses[e.status])}</small></div><span class="transfer-amount">−${esc(formatAmount(e.amount))} NUMN</span></summary><div class="transfer-detail"><p class="address">${esc(e.recipient)}</p><p class="address">${esc(e.id)}</p><p>Nonce ${esc(e.nonce)} · ${esc(new Date(e.createdAt).toLocaleString(locale()))}</p>${e.block?t`<p>Блок ${e.block}, extrinsic ${e.block}-${e.extrinsicIndex}</p>`:''}<p>Оценка комиссии: ${esc(formatAmount(e.fee))} NUMN. Это не подтверждение её фактического списания.</p></div></details>`).join(''):t('<p class="muted">Локальных отправок нет. Это не означает, что адрес не использовался.</p>');
+  return rows.length?rows.map(e=>t`<details class="transfer"><summary><div class="transfer-info"><strong>${e.kind==='identity'?t('Изменение Identity'):esc(shorten(e.recipient))}</strong><small>${esc(statuses[e.status])}</small></div><span class="transfer-amount">${e.kind==='identity'?esc(e.info.display||'—'):'−'+esc(formatAmount(e.amount))+' NUMN'}</span></summary><div class="transfer-detail"><p class="address">${esc(e.recipient)}</p><p class="address">${esc(e.id)}</p><p>Nonce ${esc(e.nonce)} · ${esc(new Date(e.createdAt).toLocaleString(locale()))}</p>${e.block?t`<p>Блок ${e.block}, extrinsic ${e.block}-${e.extrinsicIndex}</p>`:''}${e.kind==='identity'?identityInfoHtml(e.info)+t`<p>Изменение залога: ${formatAmount(e.depositDelta)} NUMN</p>`:''}<p>Оценка комиссии: ${esc(formatAmount(e.fee))} NUMN. Это не подтверждение её фактического списания.</p></div></details>`).join(''):t('<p class="muted">Локальных отправок нет. Это не означает, что адрес не использовался.</p>');
+}
+function identityLabels(){return {display:t('Публичное имя'),avatar:t('Аватар · URL'),bio:t('О себе'),web:t('Сайт'),email:'Email',github:'GitHub',matrix:'Matrix',x:'X',telegram:'Telegram',discord:'Discord'};}
+function identityInfoHtml(info){const labels=identityLabels();return '<dl class="identity-fields">'+IDENTITY_FIELDS.map(({key})=>`<dt>${esc(labels[key])}</dt><dd>${esc(info[key]||'—')}</dd>`).join('')+'</dl>';}
+async function identityScreen(){
+  prepared=null;render(t`${header(t('Публичный профиль · Identity'))}<p class="address">${esc(address)}</p><p>Данные из блокчейна, отдельно от локального имени. Публичное имя не уникально и само по себе не подтверждает личность владельца.</p><section id="identityProfile"><p>Загружаем Identity…</p></section><button id="reloadIdentity" class="secondary">Обновить профиль</button>`);back();action('reloadIdentity',identityScreen);
+  const s=session,v=view,owner=address;
+  try{
+    const profile=await getChain().identity(owner);alive(s,v);identityProfile={...profile,endpoint:settings.endpoint};
+    $('identityProfile').innerHTML=(profile.exists?identityInfoHtml(profile.info):t('<p>Публичный профиль ещё не задан.</p>'))+t`<p>Залог Identity: ${formatAmount(profile.deposit)} NUMN</p><p class="foot">Финализированный блок #${profile.height}. Загружено ${esc(new Date(profile.updatedAt).toLocaleString(locale()))}.</p><p class="foot">Оценки регистраторов: ${profile.judgements.length}. Наличие профиля не означает проверку.</p>${profile.judgements.length?`<details><summary>Judgements</summary><p class="address">${esc(JSON.stringify(profile.judgements))}</p></details>`:''}<p class="foot">Ссылки и аватар показаны текстом; внешние изображения не загружаются.</p><button id="editIdentity" ${watchOnly()||journalError?'disabled':''}>Задать или изменить профиль</button>${watchOnly()?t('<p class="foot">Только просмотр: для изменения нужен ключ именно этого адреса.</p>'):''}`;
+    action('editIdentity',()=>identityEdit(profile));
+  }catch(e){if(s===session&&v===view){$('identityProfile').textContent=t('Не удалось загрузить Identity. Изменение недоступно.');message(e.message,true);}}
+}
+function identityEdit(profile){
+  if(watchOnly()||journalError||profile.address!==address)throw Error(t('Изменение Identity недоступно.'));
+  const labels=identityLabels();
+  render(t`${header(t('Изменить Identity'))}<p class="address">${esc(address)}</p><p class="error">Все поля будут публичными. Старые значения сохраняются в истории блокчейна даже после изменения. Не вводите seed-фразу, ключи, пароли или приватные данные.</p><p class="foot">Локальное имя не изменится. Пустое поле удаляет его текущее значение. Изменение профиля может сбросить оценки регистраторов.</p>${IDENTITY_FIELDS.map(({key,limit})=>`<label>${esc(labels[key])}<textarea id="identity-${key}" rows="${key==='bio'?5:2}" maxlength="${limit}" autocomplete="off" autocapitalize="none" spellcheck="false">${esc(profile.info[key])}</textarea><small id="identity-count-${key}"></small></label>`).join('')}<label class="check"><input id="identityPublic" type="checkbox">Я понимаю, что эти данные публикуются в блокчейне.</label><button id="prepareIdentity">Рассчитать залог и комиссию</button>`);action('back',identityScreen);
+  for(const {key,limit} of IDENTITY_FIELDS){const input=$('identity-'+key),count=$('identity-count-'+key);const update=()=>{const bytes=new TextEncoder().encode(input.value).length;count.textContent=t`${bytes} / ${limit} байт UTF-8`;count.className=bytes>limit?'error':'foot';};input.oninput=update;update();}
+  const nameHelp=document.createElement('p');nameHelp.className='foot';nameHelp.textContent=t('Кириллица поддерживается. Имя — до 32 байт UTF-8: обычно до 16 русских букв. Лимиты остальных полей указаны под ними.');$('identity-display').closest('label').before(nameHelp);
+  action('prepareIdentity',async()=>{
+    if(!$('identityPublic').checked)throw Error(t('Подтвердите публичность данных Identity.'));
+    const info=validateIdentity(Object.fromEntries(IDENTITY_FIELDS.map(({key})=>[key,$('identity-'+key).value]))),s=session,v=view;
+    const next=await getChain().prepareIdentity(address,info,profile.fingerprint,journal);alive(s,v);prepared=next;identityConfirm();
+  });
+}
+function identityConfirm(){
+  const intent=prepared.intent;
+render(t`${header(t('Подтвердить Identity'))}<p class="address">${esc(intent.address)}</p><p>Будут опубликованы следующие поля:</p>${identityInfoHtml(intent.info)}<dl><dt>Новый залог Identity</dt><dd>${formatAmount(intent.deposit)} NUMN</dd><dt>Изменение залога</dt><dd>${formatAmount(intent.depositDelta)} NUMN</dd><dt>Оценка сетевой комиссии</dt><dd>${formatAmount(intent.fee)} NUMN</dd><dt>Баланс проверяется с резервом на комиссию</dt><dd>${formatAmount(intent.feeBudget)} NUMN</dd><dt>Нода</dt><dd>${esc(intent.endpoint)}</dd></dl><p class="foot">Положительное изменение залога резервируется, отрицательное освобождает часть залога. Это не комиссия. Комиссия сети списывается отдельно. Пустые поля очищаются; история публикаций остаётся публичной.</p>${biometric.enabled?t('<button id="confirmBio">Подтвердить биометрией</button>'):''}<label>Пароль для этой операции<input id="sendPassword" type="password" autocomplete="off"></label><button id="confirmPassword">Подписать и опубликовать профиль</button><p class="foot">Предпросмотр действует не более 90 секунд. При неизвестном исходе не повторяйте операцию, проверьте журнал.</p>`);back();
+  action('confirmPassword',()=>sendPrepared(false));action('confirmBio',()=>sendPrepared(true));
 }
 function historyScreen(){render(t`${header(t('Локальный журнал'))}<p class="foot">Ожидающий перевод блокирует новую отправку до проверки. При сетевой ошибке не создавайте дубликат. Проверяются только финализированные блоки, по 12 за обновление.</p>${historyRows()}<button id="refreshHistory">Проверить отправки</button>`);back();action('refreshHistory',refresh);}
 async function receive(){
@@ -312,7 +360,7 @@ async function sendPrepared(useBio){
   if(busySend||!prepared)throw Error(t('Отправка уже выполняется или отменена.'));
   busySend=true;const s=session,v=view,p=prepared,c=getChain();let pair=null,secret=null,password='';
   try{
-    if(useBio){const result=JSON.parse(await native('biometricConfirm',{txid:p.id,address:p.intent.recipient,amount:formatAmount(p.intent.amount),fee:formatAmount(p.intent.feeBudget),total:formatAmount(BigInt(p.intent.amount)+BigInt(p.intent.feeBudget))}));if(result.txid!==p.id)throw Error(t('Подтверждение не относится к этому переводу.'));password=result.password;}
+    if(useBio){const identity=p.intent.kind==='identity',amount=identity?(BigInt(p.intent.depositDelta)>0n?BigInt(p.intent.depositDelta):0n):BigInt(p.intent.amount);const result=JSON.parse(await native('biometricConfirm',{txid:p.id,address:p.intent.recipient,amount:formatAmount(amount),fee:formatAmount(p.intent.feeBudget),total:formatAmount(amount+BigInt(p.intent.feeBudget)),kind:identity?'identity':'transfer',display:identity?p.intent.info.display:''}));if(result.txid!==p.id)throw Error(t('Подтверждение не относится к этому переводу.'));password=result.password;}
     else password=takePassword('sendPassword');
     alive(s,v);secret=await decryptVault(vault,password);password='';alive(s,v);
     try{pair=pairForWallet(secret,p.intent.address);}finally{clearSecret(secret);secret=null;}
@@ -339,7 +387,7 @@ function settingsScreen(){
   action('showSeed',async()=>{const s=session,v=view;let password=takePassword('settingsPassword'),secret=null;try{secret=await decryptVault(vault,password);password='';alive(s,v);const selected=secret.wallets.find(e=>e.address===address);if(!selected||selected.type==='watch')throw Error(t('Ключ отсутствует.'));render(t`${header(selected.secretSeed?t('Резервный secretSeed'):t('Резервная фраза'))}<p class="address">${esc(address)}</p><p class="error">Секрет выбранного кошелька. Запишите офлайн, не отправляйте его никому. Экран закроется через 60 секунд. Копирование отключено.</p><div id="backupSeed" class="secret-display" data-secret="true" aria-hidden="true">${esc(selected.secretSeed||selected.mnemonic)}</div><p>Путь: ${esc(selected.path||t('(пустой)'))}</p>`);expireSecret();back();}finally{password='';clearSecret(secret);}});
   action('deleteWallet',async()=>{const s=session,v=view;if($('deleteText').value!==t('УДАЛИТЬ'))throw Error(t('Введите УДАЛИТЬ.'));if(journal.some(e=>['unknown','submitted'].includes(e.status)))throw Error(t('Есть непроверенная отправка. Сначала сохраните её хеш и проверьте результат; удаление сейчас заблокировано.'));let password=takePassword('settingsPassword'),secret=null;try{secret=await decryptVault(vault,password);alive(s,v);await native('delete');alive(s,v);vault='';biometric={available:false,enabled:false};await lock();}finally{password='';clearSecret(secret);}});
 }
-async function lock(){session++;clearTimeout(idleTimer);clearTimeout(secretTimer);cancelNativeCalls();void native('invalidate').catch(()=>{});address=null;accounts=[];cache=null;contacts=[];journal=[];transferPages=[];prepared=null;vault?locked(false):welcome();await closeChain();}
+async function lock(){session++;clearTimeout(idleTimer);clearTimeout(secretTimer);cancelNativeCalls();void native('invalidate').catch(()=>{});address=null;accounts=[];cache=null;contacts=[];journal=[];transferPages=[];identityProfile=null;prepared=null;vault?locked(false):welcome();await closeChain();}
 globalThis.appBackground=()=>{void lock();};
 globalThis.appResume=()=>{const s=session,v=view;void(async()=>{const language=await native('loadLanguage');checkView(s,v);setLanguage(language);const stored=await native('load');checkView(s,v);vault=stored;if(vault&&!address)locked(true);else await resumeImport();})().catch(()=>{});};
 async function start(){setLanguage(await native('loadLanguage'));render(t('<h1>DiffPool NUMEN</h1><p>Подготавливаем криптографию…</p>'));await initCrypto();vault=await native('load');await bioStatus();vault?locked(true):welcome();}

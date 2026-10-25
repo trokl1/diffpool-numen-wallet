@@ -40,7 +40,7 @@ final class BiometricVault {
  private Session active;
  private static final class Session {
   int id; boolean enabling; Cipher cipher; byte[] plaintext, ciphertext, binding;
-  String txid,address,amount,fee,total;
+  String txid,address,amount,fee,total,display; boolean identity;
   CancellationSignal signal=new CancellationSignal(); Runnable timeout;
  }
  BiometricVault(Activity activity,File vault,IntPredicate validSession,Result result){
@@ -82,8 +82,8 @@ final class BiometricVault {
   activity.runOnUiThread(()->start(id,plain,true,null));
  }
  void unlock(int id){activity.runOnUiThread(()->start(id,null,false,null));}
- void confirm(int id,String txid,String address,String amount,String fee,String total){
-  Session transaction=new Session();transaction.txid=txid;transaction.address=address;transaction.amount=amount;transaction.fee=fee;transaction.total=total;
+ void confirm(int id,String txid,String address,String amount,String fee,String total,boolean identity,String display){
+  Session transaction=new Session();transaction.txid=txid;transaction.address=address;transaction.amount=amount;transaction.fee=fee;transaction.total=total;transaction.identity=identity;transaction.display=display;
   activity.runOnUiThread(()->start(id,null,false,transaction));
  }
  private void start(int id,byte[] plain,boolean enabling,Session transaction){
@@ -107,11 +107,11 @@ final class BiometricVault {
    }
    s.binding=binding();
    BiometricPrompt.Builder prompt=new BiometricPrompt.Builder(activity)
-    .setTitle(enabling?t("Включить биометрический вход"):s.txid!=null?t("Подтвердить отправку NUMN"):t("Открыть DiffPool NUMEN"))
-    .setSubtitle(s.txid!=null?s.amount+" NUMN":t("Подтвердите отпечатком или защищённой биометрией"))
+    .setTitle(enabling?t("Включить биометрический вход"):s.identity?t("Опубликовать Identity"):s.txid!=null?t("Подтвердить отправку NUMN"):t("Открыть DiffPool NUMEN"))
+    .setSubtitle(s.identity?s.display:s.txid!=null?s.amount+" NUMN":t("Подтвердите отпечатком или защищённой биометрией"))
     .setNegativeButton(t("Отмена"),activity.getMainExecutor(),(dialog,which)->cancel(t("Биометрия отменена. Можно использовать пароль.")));
    if(Build.VERSION.SDK_INT>=30)prompt.setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG);
-   if(s.txid!=null)prompt.setDescription(t("Получатель:\n")+s.address+t("\nОценка комиссии: ")+s.fee+t(" NUMN\nВсего: ")+s.total+" NUMN");
+   if(s.txid!=null)prompt.setDescription(s.identity?t("Адрес профиля:\n")+s.address+t("\nДополнительно зарезервировать: ")+s.amount+t(" NUMN\nРезерв на комиссию: ")+s.fee+t(" NUMN\nВсего: ")+s.total+" NUMN":t("Получатель:\n")+s.address+t("\nОценка комиссии: ")+s.fee+t(" NUMN\nВсего: ")+s.total+" NUMN");
    s.timeout=()->cancel(t("Время подтверждения истекло. Попробуйте ещё раз или используйте пароль."));
    handler.postDelayed(s.timeout,90000);
    prompt.build().authenticate(new BiometricPrompt.CryptoObject(s.cipher),s.signal,activity.getMainExecutor(),new BiometricPrompt.AuthenticationCallback(){

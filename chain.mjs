@@ -3,6 +3,7 @@ import { ApiPromise, HttpProvider } from '@polkadot/api';
 import { NETWORK, validateEndpoint, validateRpc } from './config.mjs';
 import { validateRecipient, parseAmount, spendable, intentHash } from './core.mjs';
 import { assertSigningPolicy,assertTransferCall } from './signing-policy.mjs';
+import {validateIdentity,identityHex,identityArgs,identityDeposit,assertIdentityCall,decodeIdentity} from './identity.mjs';
 
 export const KNOWN_EXTENSIONS = new Set(['CheckNonZeroSender','CheckSpecVersion','CheckTxVersion','CheckGenesis','CheckMortality','CheckNonce','CheckWeight','ChargeTransactionPayment','CheckMetadataHash','WeightReclaim']);
 export function assertNetwork(genesis, properties) {
@@ -39,6 +40,12 @@ export class Chain {
     } catch (e) { await api.disconnect();throw e; }
   }
   async close() { this.closed=true;if(this.api){await this.api.disconnect();this.api=null;} }
+  async identity(address,hash=null){
+    validateRecipient(address);const api=await this.connect();assertSigningPolicy(api);
+    const at=hash||await this.rpc('chain_getFinalizedHead');
+    const [registration,header]=await Promise.all([api.query.identity.identityOf.at(at,address),this.rpc('chain_getHeader',[at])]);
+    return {...decodeIdentity(registration),address,hash:at,height:Number(BigInt(header.number)),updatedAt:Date.now()};
+  }
   async snapshot(address) {
     validateRecipient(address);
     const api=await this.connect();
@@ -76,9 +83,28 @@ export class Chain {
       genesis:NETWORK.genesis,endpoint:this.endpoint,specVersion:snapshot.specVersion,transactionVersion:snapshot.transactionVersion,createdAt:Date.now()};
     return {intent,id:intentHash(intent),snapshot,tx,options};
   }
+  async prepareIdentity(address,info,expectedFingerprint,journal){
+    validateRecipient(address);const checked=validateIdentity(info);
+    if(journal.some(x=>x.address===address&&['submitted','unknown'].includes(x.status)))throw Error(t('Сначала проверьте предыдущую отправку в истории. Повторный перевод заблокирован.'));
+    const snapshot=await this.snapshot(address),options=this.options(snapshot),profile=await this.identity(address,snapshot.hash);
+    if(snapshot.syncing||snapshot.height-snapshot.finalizedHeight>32)throw Error(t('Нода синхронизируется или финализация отстаёт. Отправка недоступна.'));
+    if(snapshot.nonce!==snapshot.nextNonce)throw Error(t('В сети уже есть ожидающая транзакция этого счёта. Дождитесь включения.'));
+    if(profile.fingerprint!==expectedFingerprint)throw Error(t('Профиль Identity изменился. Загрузите его заново, чтобы не затереть чужие изменения.'));
+    if(identityHex(profile.info)===identityHex(checked))throw Error(t('Поля Identity не изменились.'));
+    const deposit=identityDeposit(checked,this.api.consts.identity.basicDeposit.toString(),this.api.consts.identity.byteDeposit.toString());
+    const delta=deposit-BigInt(profile.deposit),tx=this.api.tx.identity.setIdentity(identityArgs(checked));assertIdentityCall(tx,checked);
+    const fake=this.api.tx(tx.toU8a()).signFake(address,options).toU8a(),fee=(await this.api.call.transactionPaymentApi.queryInfo(fake,fake.length)).partialFee.toBigInt();
+    const feeBudget=fee+(fee/5n>0n?fee/5n:1n);
+    if((delta>0n?delta:0n)+feeBudget>BigInt(snapshot.available))throw Error(t('Недостаточно баланса для залога Identity, комиссии и остатка счёта.'));
+    const intent={kind:'identity',address,recipient:address,amount:'0',info:checked,previousIdentity:profile.fingerprint,deposit:deposit.toString(),depositDelta:delta.toString(),
+      fee:fee.toString(),feeBudget:feeBudget.toString(),nonce:snapshot.nonce,hash:snapshot.hash,height:snapshot.height,
+      genesis:NETWORK.genesis,endpoint:this.endpoint,specVersion:snapshot.specVersion,transactionVersion:snapshot.transactionVersion,createdAt:Date.now()};
+    return {intent,id:intentHash(intent),snapshot,tx,options};
+  }
   async signPrepared(prepared,pair,guard=()=>{}) {
     guard();
     if(prepared.id!==intentHash(prepared.intent)||pair.address!==prepared.intent.address||prepared.intent.endpoint!==this.endpoint)throw Error(t('Подтверждение перевода не совпадает.'));
+    if(prepared.intent.kind!==undefined&&prepared.intent.kind!=='identity')throw Error(t('Неподдерживаемый тип операции.'));
     if(Date.now()-prepared.intent.createdAt>90000)throw Error(t('Предпросмотр устарел. Рассчитайте заново.'));
     const now=await this.snapshot(pair.address);
     guard();
@@ -86,11 +112,21 @@ export class Chain {
       throw Error(t('Состояние сети/nonce изменилось. Рассчитайте перевод заново.'));
     if(await this.rpc('chain_getBlockHash',[prepared.intent.height])!==prepared.intent.hash)throw Error(t('Произошла реорганизация. Рассчитайте перевод заново.'));
     guard();
-    if(BigInt(prepared.intent.amount)+BigInt(prepared.intent.feeBudget)>BigInt(now.available))throw Error(t('Баланс изменился.'));
+    const isIdentity=prepared.intent.kind==='identity';
+    if(isIdentity){
+      if(prepared.intent.recipient!==pair.address||prepared.intent.amount!=='0')throw Error(t('Подтверждение перевода не совпадает.'));
+      const profile=await this.identity(pair.address,now.hash);guard();assertSigningPolicy(this.api);
+      const deposit=identityDeposit(prepared.intent.info,this.api.consts.identity.basicDeposit.toString(),this.api.consts.identity.byteDeposit.toString());
+      if(profile.fingerprint!==prepared.intent.previousIdentity||deposit.toString()!==prepared.intent.deposit||(deposit-BigInt(profile.deposit)).toString()!==prepared.intent.depositDelta)
+        throw Error(t('Профиль Identity изменился. Загрузите его заново, чтобы не затереть чужие изменения.'));
+    }
+    const required=isIdentity?(BigInt(prepared.intent.depositDelta)>0n?BigInt(prepared.intent.depositDelta):0n):BigInt(prepared.intent.amount);
+    if(required+BigInt(prepared.intent.feeBudget)>BigInt(now.available))throw Error(t('Баланс изменился.'));
     // Check the actual encoded call again rather than trusting mutable UI labels.
-    const tx=this.api.tx.balances.transferKeepAlive(prepared.intent.recipient,prepared.intent.amount);
+    const tx=isIdentity?this.api.tx.identity.setIdentity(identityArgs(prepared.intent.info)):this.api.tx.balances.transferKeepAlive(prepared.intent.recipient,prepared.intent.amount);
+    const checkCall=()=>isIdentity?assertIdentityCall(tx,prepared.intent.info):assertTransferCall(tx,prepared.intent.recipient,prepared.intent.amount);
     assertSigningPolicy(this.api);
-    assertTransferCall(tx,prepared.intent.recipient,prepared.intent.amount);
+    checkCall();
     if(tx.method.toHex()!==prepared.tx.method.toHex())throw Error(t('Данные перевода изменены.'));
     // Rebuild signing options from the confirmed intent, never from mutable UI options.
     const options=this.options({...prepared.intent});
@@ -99,7 +135,7 @@ export class Chain {
     guard();
     if(info.partialFee.toBigInt()>BigInt(prepared.intent.feeBudget))throw Error(t('Комиссия выросла. Рассчитайте заново.'));
     if(this.closed)throw Error(t('Соединение закрыто.'));
-    assertSigningPolicy(this.api);assertTransferCall(tx,prepared.intent.recipient,prepared.intent.amount);
+    assertSigningPolicy(this.api);checkCall();
     // No awaits or network calls after producing the real signature. submitOnce
     // must durably persist the outbox before these bytes may leave the device.
     tx.sign(pair,options);

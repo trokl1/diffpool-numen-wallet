@@ -6,23 +6,43 @@ Start with a small amount and keep an offline backup of every account's recovery
 phrase or original secret seed. Never use the public test keys in this repository.
 
 Download the signed Android APK from [GitHub Releases](https://github.com/trokl1/diffpool-numen-wallet/releases).
-The current release is [0.5.2 beta](https://github.com/trokl1/diffpool-numen-wallet/releases/tag/v0.5.2).
+The current release is [0.5.3 beta](https://github.com/trokl1/diffpool-numen-wallet/releases/tag/v0.5.3).
 Release assets include SHA-256 checksums; source archives are generated from the release tag.
 
-**0.5.2 includes Russian/English language selection and all 0.5.1 security fixes.**
+**0.5.3 includes public Identity profiles, optional donations and large-balance layout fixes,
+along with Russian/English language selection and all 0.5.1 security fixes.**
 Users of 0.5.0 should update; that release does not include these fixes. See the
 security notes below. Install the new APK over the existing app without uninstalling.
+
+**0.5.3 adds on-chain Identity viewing and editing.**
+Identity is separate from device-local names. Fields are public and remain in
+historical blocks after editing. Never put recovery phrases, keys or private data
+in the profile. A deposit is reserved for storage and a network fee is charged
+separately; both are shown before password/biometric confirmation.
 
 ## Features
 
 - Create and import sr25519 accounts, multiple accounts and watch-only addresses.
 - Local account names and address book; encrypted storage and optional biometrics.
+- Read the selected account's on-chain Identity; create or
+  edit public name, avatar URL, bio, website, email, GitHub, Matrix, X, Telegram
+  and Discord. Watch-only profiles are read-only. Names are not unique or proof
+  of verification. Links/images are displayed as text, not automatically fetched.
+  Cyrillic is preserved; the name limit is 32 UTF-8 bytes (usually 16 Russian
+  letters), with byte counters for every field.
+- Optional **Support development** footer using the public
+  FEE address `nu4dxPMnaPXN4ZRWJaUM6RnSY8zuhi1NrYiR7Nfh42wB9YAxr`.
+  It prefills the normal transfer recipient, leaves the amount empty and requires
+  explicit confirmation. No automatic donations or added wallet fee.
 - Switch **Русский / English** before unlocking or in **Settings → Language**.
   The device-local preference survives restarts; existing wallets default to
   Russian. App screens, validation errors and native biometric prompts are
   translated. Android-owned system messages may follow the device language.
   Account/contact names, addresses, keys and amounts are never translated.
 - Native NUMN transfers with an explicit fee/recipient confirmation and durable outbox.
+- Compact, responsive balance display. An approximate headline is marked with
+  `≈`; expand **Exact balance** to see every decimal. Tiny nonzero balances are
+  never shortened to zero. Transfer amounts and accounting precision are unchanged.
 - Balance and incoming transfers refresh on unlock and every minute on the home
   screen. Only the selected account is polled; the setting can be disabled.
 - Incoming/outgoing transfers and mining rewards inside the wallet, server-side
@@ -69,6 +89,11 @@ node scripts/check-qr-ui.mjs
 node scripts/check-security-chain.mjs
 node scripts/check-security-ui.mjs
 node scripts/check-language-ui.mjs
+node scripts/check-identity-chain.mjs
+node scripts/check-identity-ui.mjs
+node scripts/check-balance-ui.mjs
+# Optional read-only mainnet Identity/fee probe; never broadcasts:
+node scripts/check-identity-live.mjs
 
 # Set NUMEN_SIGNING_PASSWORD securely in the process environment, not source code.
 ./scripts/build.ps1 -Sdk C:/Android/sdk -Jdk C:/Java/jdk-17 -KeyStore C:/private/wallet.p12
@@ -117,6 +142,17 @@ device backups or real transaction secrets into GitHub issues or pull requests.
   against independently encoded SCALE bytes (`Balances=3`, `transfer_keep_alive=3`,
   `MultiAddress::Id`, exact u128 amount). Unknown metadata/runtime blocks sending;
   it is never automatically accepted from the selected RPC.
+- Identity uses independently encoded SCALE `Identity=8`, `set_identity=1` with
+  the ten ordered bounded UTF-8 byte fields from the
+  [NUMEN Identity source](https://github.com/numen-network/numen/blob/master/runtime/src/identity_info.rs).
+  This is NOT the generic Substrate `Data` enum. Byte limits are 32/128/2048/64
+  for display/avatar/bio/web and 32 for each remaining field. Deposit calculation
+  includes SCALE length prefixes. The original full registration is checked
+  again before signing to reject concurrent edits; fields are not merged blindly.
+  Fee quotes remain fake-signed; Identity and transfers share the durable outbox
+  and pending-nonce guard. No registrar judgement, sub-account management or
+  `clear_identity` transaction is implemented. Empty fields clear their values,
+  but do not remove the registration or release its entire basic deposit.
 - The fingerprint was compared on 2026-10-24 between the official HTTPS RPC and
   an independently operated DiffPool node. Runtime types/version/extensions were
   checked against [the official runtime source](https://github.com/numen-network/numen/blob/runtime-v10000/runtime/src/lib.rs).

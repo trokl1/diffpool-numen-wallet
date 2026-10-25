@@ -1,4 +1,4 @@
-DiffPool NUMEN 0.5.2
+DiffPool NUMEN 0.5.3
 Native shell and contacts adapted from Pearl Personal 0.7.0 (ISC).
 
 ISC License

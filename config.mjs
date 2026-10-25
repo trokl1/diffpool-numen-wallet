@@ -6,7 +6,9 @@ export const NETWORK = Object.freeze({
   // Cross-check with our node before release; never trust a custom endpoint's name alone.
   genesis: '0x7b7c7b93a0454cf907b400703e67691394db8558bb07d470af3d0ac510d91904',
 });
-export const VERSION = '0.5.2';
+export const VERSION = '0.5.3';
+// Public owner-approved FEE address; used only for optional, user-confirmed donations.
+export const DONATION_ADDRESS = 'nu4dxPMnaPXN4ZRWJaUM6RnSY8zuhi1NrYiR7Nfh42wB9YAxr';
 export function validateEndpoint(value) {
   const url = new URL(String(value).trim());
   if (url.protocol !== 'https:' || !url.hostname || url.username || url.password || url.hash || url.search)

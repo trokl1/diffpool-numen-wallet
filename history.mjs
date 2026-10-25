@@ -1,6 +1,7 @@
 import {t} from './i18n.mjs';
 import { validateRecipient } from './core.mjs';
 import { NETWORK } from './config.mjs';
+import {validateIdentity} from './identity.mjs';
 export const PENDING=new Set(['submitted','unknown']);
 export function readHistory(raw){
   if(!raw)return [];
@@ -9,6 +10,11 @@ export function readHistory(raw){
   const seen=new Set();
   for(const row of data.entries){
     validateRecipient(row.address);validateRecipient(row.recipient);
+    if(row.kind!==undefined&&row.kind!=='identity')throw Error(t('Неподдерживаемый тип операции.'));
+    if(row.kind==='identity'){
+      validateIdentity(row.info);
+      if(row.recipient!==row.address||row.amount!=='0'||!/^\d{1,39}$/.test(row.deposit)||! /^-?\d{1,39}$/.test(row.depositDelta))throw Error(t('Повреждена запись Identity в журнале.'));
+    }
     if(row.genesis!==NETWORK.genesis||!/^0x[0-9a-f]{64}$/.test(row.id)||seen.has(row.id)||!['unknown','submitted','finalized','failed','expired'].includes(row.status))throw Error(t('Повреждён журнал отправок.'));
     for(const field of ['amount','fee','feeBudget','nonce'])if(!/^\d{1,40}$/.test(row[field]))throw Error(t('Неверная сумма/nonce в журнале.'));
     for(const field of ['height','expiry','scanHeight','createdAt'])if(!Number.isSafeInteger(row[field])||row[field]<0)throw Error(t('Неверная высота в журнале.'));

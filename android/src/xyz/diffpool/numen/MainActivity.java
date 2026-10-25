@@ -248,7 +248,10 @@ public final class MainActivity extends Activity {
        JSONObject data=new JSONObject(json);
        String txid=data.getString("txid"),address=data.getString("address"),amount=data.getString("amount"),fee=data.getString("fee"),total=data.getString("total");
        if(!txid.matches("0x[0-9a-f]{64}")||!address.matches("nu[1-9A-HJ-NP-Za-km-z]{40,60}")||!amount.matches("[0-9]{1,21}(\\.[0-9]{1,18})?")||!fee.matches("[0-9]{1,21}(\\.[0-9]{1,18})?")||!total.matches("[0-9]{1,22}(\\.[0-9]{1,18})?"))throw new IOException(t("Неверные данные подтверждения перевода."));
-       biometric.confirm(id,txid,address,amount,fee,total);return;
+       String kind=data.optString("kind","transfer"),display=data.optString("display","");
+       if(!kind.equals("transfer")&&!kind.equals("identity"))throw new IOException(t("Неподдерживаемый тип операции."));
+       if(display.getBytes(StandardCharsets.UTF_8).length>32||display.matches("(?s).*[\\p{Cntrl}\\u202a-\\u202e\\u2066-\\u2069].*"))throw new IOException(t("Неверное публичное имя Identity."));
+       biometric.confirm(id,txid,address,amount,fee,total,kind.equals("identity"),display);return;
       }
       case "biometricDisable": biometric.cancel(t("Биометрический вход отключён.")); biometric.remove(); answer="ok"; break;
       case "cancelBiometric": biometric.cancel(t("Биометрия отменена.")); answer="ok"; break;
